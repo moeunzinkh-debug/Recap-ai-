@@ -1,0 +1,5 @@
+{
+  "name": "Recap AI — Khmer Video Recap",
+  "description": "បង្កើតស្គ្រីបសម្រាយរឿង Anime និងភាពយន្តជាភាសាខ្មែរ ពីវីដេអូដែលអ្នកអាប់ឡូត ដោយប្រើ Gemini AI។ ដក Frames ក្នុង Browser ផ្ទាល់ ដោយមិនត្រូវការ Server។",
+  "requestFramePermissions": []
+}
