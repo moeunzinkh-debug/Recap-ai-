@@ -3,7 +3,8 @@ import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { apiKeys } from "@/db/schema";
 import { encryptSecret, decryptSecret, maskSecret } from "@/lib/crypto";
-import { GEMINI_KEY_NAME, getGeminiKeyInfo } from "@/lib/gemini";
+import { getGeminiKeyInfo } from "@/lib/gemini";
+import { GEMINI_KEY_NAME } from "@/lib/constants";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -74,6 +75,12 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    if (apiKey.length > 512) {
+      return NextResponse.json(
+        { ok: false, message: "API Key វែងពេក — អតិបរមា 512 តួអក្សរ។" },
+        { status: 400 }
+      );
+    }
 
     const encrypted = encryptSecret(apiKey);
 
@@ -108,6 +115,12 @@ export async function DELETE(request: Request) {
   try {
     const url = new URL(request.url);
     const name = url.searchParams.get("name") || GEMINI_KEY_NAME;
+    if (!NAME_REGEX.test(name)) {
+      return NextResponse.json(
+        { ok: false, message: "ឈ្មោះ API Key មិនត្រឹមត្រូវ។" },
+        { status: 400 }
+      );
+    }
 
     const result = await db.delete(apiKeys).where(eq(apiKeys.name, name));
     const deleted = result.rowCount ?? 0;

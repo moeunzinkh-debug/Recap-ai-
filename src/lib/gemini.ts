@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { apiKeys } from "@/db/schema";
 import { decryptSecret } from "@/lib/crypto";
 import { buildRecapPrompt } from "@/lib/prompt";
+import { formatClock, GEMINI_KEY_NAME } from "@/lib/constants";
 
 export class GeminiError extends Error {}
 
@@ -14,8 +15,6 @@ export interface RecapStreamInput {
   intervalSec: number;
   model: string;
 }
-
-export const GEMINI_KEY_NAME = "GEMINI_API_KEY";
 
 export interface GeminiKeyInfo {
   key: string | null;
@@ -38,13 +37,14 @@ export async function getGeminiKeyInfo(): Promise<GeminiKeyInfo> {
       try {
         return { key: decryptSecret(row.valueEncrypted), source: "db" };
       } catch {
-        // corrupted entry — fall through to env
+        // Corrupt or undecryptable entry: fall through to the environment key.
       }
     }
   } catch {
-    // database unavailable — fall through to env
+    // Database unavailable: an environment key can still keep analysis working.
   }
-  const envKey = process.env.GEMINI_API_KEY;
+
+  const envKey = process.env.GEMINI_API_KEY?.trim();
   return envKey
     ? { key: envKey, source: "env" }
     : { key: null, source: "none" };
@@ -54,10 +54,7 @@ export async function getGeminiKey(): Promise<string | null> {
   return (await getGeminiKeyInfo()).key;
 }
 
-/**
- * Gemini 3.x models (3.1, 3.6, ...) do not support the legacy sampling
- * parameters (temperature/topP) — they use thinking levels instead.
- */
+/** Gemini 3 text models use thinking levels instead of legacy sampling options. */
 function isGemini3x(model: string): boolean {
   return /^gemini-3\./.test(model);
 }
@@ -76,9 +73,26 @@ function buildGenerationConfig(model: string): Record<string, unknown> {
   };
 }
 
+function mapGeminiError(error: unknown, model: string): GeminiError {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (/API key not valid|API_KEY_INVALID|invalid api key|401/i.test(message)) {
+    return new GeminiError("Gemini API Key មិនត្រឹមត្រូវ។ សូមពិនិត្យ Key ក្នុងទំព័រ API Keys។");
+  }
+  if (/quota|resource exhausted|429/i.test(message)) {
+    return new GeminiError("លើសកូតាប្រើប្រាស់ Gemini (Quota Exceeded)។ សូមព្យាយាមម្ដងទៀតពេលក្រោយ។");
+  }
+  if (/model|not found|404|permission|access|forbidden|403/i.test(message)) {
+    return new GeminiError(
+      `ម៉ូដែល ${model} មិនអាចប្រើបានជាមួយ API Key របស់អ្នកទេ។ សូមជ្រើសរើសម៉ូដែលផ្សេងទៀតក្នុងបញ្ជី។`
+    );
+  }
+  return new GeminiError(`Gemini API បរាជ័យ៖ ${message.slice(0, 160)}`);
+}
+
 /**
- * Streams a Khmer recap script from Gemini by sending the extracted
- * frames (in chronological order) as inline images.
+ * Streams a Khmer recap script from Gemini by sending extracted frames in
+ * chronological order. A text marker before every image preserves timestamps.
  */
 export async function* streamRecapScript(
   input: RecapStreamInput
@@ -86,12 +100,11 @@ export async function* streamRecapScript(
   const apiKey = await getGeminiKey();
   if (!apiKey) {
     throw new GeminiError(
-      "រកមិនឃើញ Gemini API Key ទេ។ សូមបញ្ចូល Key ក្នុងទំព័រ API Keys ឬកំណត់ក្នុងឯកសារ .env របស់អ្នក។"
+      "រកមិនឃើញ Gemini API Key ទេ។ សូមបញ្ចូល Key ក្នុងទំព័រ API Keys ឬកំណត់ GEMINI_API_KEY ក្នុង environment។"
     );
   }
 
   const ai = new GoogleGenAI({ apiKey });
-
   const prompt = buildRecapPrompt({
     fileName: input.fileName,
     durationSec: input.durationSec,
@@ -100,36 +113,30 @@ export async function* streamRecapScript(
   });
 
   const parts: Record<string, unknown>[] = [{ text: prompt }];
-  for (const frame of input.frames) {
+  input.frames.forEach((frame, index) => {
+    parts.push({
+      text: `Frame ${index + 1}/${input.frames.length} — ${formatClock(frame.timeSec)}`,
+    });
     parts.push({
       inlineData: {
         mimeType: "image/jpeg",
         data: frame.base64,
       },
     });
-  }
+  });
 
-  let stream;
   try {
-    stream = await ai.models.generateContentStream({
+    const stream = await ai.models.generateContentStream({
       model: input.model,
       contents: [{ role: "user", parts }],
       config: buildGenerationConfig(input.model),
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (/model|not found|404|permission|access/i.test(msg)) {
-      throw new GeminiError(
-        `ម៉ូដែល ${input.model} មិនអាចប្រើបានជាមួយ API Key របស់អ្នកទេ។ សូមជ្រើសរើសម៉ូដែលផ្សេងទៀតក្នុងបញ្ជី (${msg.slice(0, 100)})។`
-      );
-    }
-    throw new GeminiError(`Gemini API បរាជ័យ៖ ${msg.slice(0, 160)}`);
-  }
 
-  for await (const chunk of stream) {
-    const text = chunk.text;
-    if (text && text.length > 0) {
-      yield text;
+    for await (const chunk of stream) {
+      const text = chunk.text;
+      if (text) yield text;
     }
+  } catch (error) {
+    throw mapGeminiError(error, input.model);
   }
 }

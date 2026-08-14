@@ -67,10 +67,7 @@ export default function HomePage() {
     <main>
       {/* ===== Hero ===== */}
       <section className="relative overflow-hidden">
-        <div
-          className="absolute inset-0 bg-cover bg-center opacity-30"
-          style={{ backgroundImage: "url('/images/hero-bg.jpg')" }}
-        />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,rgba(245,158,11,0.18),transparent_38%),linear-gradient(135deg,rgba(239,68,68,0.08),transparent_55%)]" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#0b0d14]/60 via-[#0b0d14]/85 to-[#0b0d14]" />
         <div className="absolute -left-32 top-10 h-72 w-72 rounded-full bg-amber-500/20 blur-[120px]" />
         <div className="absolute -right-32 bottom-0 h-72 w-72 rounded-full bg-red-600/20 blur-[120px]" />

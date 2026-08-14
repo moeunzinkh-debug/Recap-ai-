@@ -30,7 +30,8 @@ export default function Navbar() {
 
         <nav className="flex items-center gap-1.5">
           {links.map(({ href, label, icon: Icon }) => {
-            const active = pathname === href;
+            const active =
+              pathname === href || (href === "/history" && pathname.startsWith("/recaps/"));
             return (
               <Link
                 key={href}

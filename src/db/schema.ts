@@ -14,7 +14,7 @@ export const recaps = pgTable("recaps", {
   fileSize: bigint("file_size", { mode: "number" }).notNull(),
   durationSec: integer("duration_sec").notNull(),
   frameCount: integer("frame_count").notNull().default(0),
-  model: text("model").notNull().default("gemini-2.0-flash"),
+  model: text("model").notNull().default("gemini-3.7-flash"),
   title: text("title"),
   script: text("script"),
   status: text("status").notNull().default("processing"), // processing | done | failed

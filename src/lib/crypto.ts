@@ -7,12 +7,16 @@ import {
 
 /**
  * AES-256-GCM encryption for secrets stored in the database.
- * The encryption key is derived from APP_SECRET (or DATABASE_URL as fallback),
- * so keys are never stored in plain text.
+ * APP_SECRET must remain stable; changing it makes existing entries unreadable.
  */
 function getEncryptionKey(): Buffer {
-  const secret =
-    process.env.APP_SECRET || process.env.DATABASE_URL || "recap-script-studio";
+  const secret = process.env.APP_SECRET;
+  if (!secret) {
+    throw new Error("APP_SECRET is required to encrypt stored API keys");
+  }
+  if (secret.length < 32) {
+    throw new Error("APP_SECRET must contain at least 32 characters");
+  }
   return createHash("sha256").update(secret).digest();
 }
 
@@ -45,7 +49,7 @@ export function decryptSecret(payload: string): string {
   return decrypted.toString("utf8");
 }
 
-/** Masks a secret for display, e.g. "AIza••••••wxyz" */
+/** Masks a secret for display, e.g. "AIza••••••wxyz". */
 export function maskSecret(plain: string): string {
   if (!plain) return "";
   if (plain.length <= 8) return "••••••••";

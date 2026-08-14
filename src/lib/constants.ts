@@ -3,7 +3,20 @@ export const MAX_DURATION_SEC = 10 * 60; // 10 minutes
 export const MIN_DURATION_SEC = 3;
 export const MAX_FRAMES = 110;
 export const FRAME_WIDTH = 640;
-export const MODEL = "gemini-2.0-flash";
+export const VIDEO_EXTENSIONS = [
+  ".mp4",
+  ".webm",
+  ".mov",
+  ".mkv",
+  ".avi",
+  ".m4v",
+  ".mpeg",
+  ".mpg",
+  ".ogv",
+  ".3gp",
+] as const;
+export const MODEL = "gemini-3.7-flash";
+export const GEMINI_KEY_NAME = "GEMINI_API_KEY";
 
 export interface GeminiModelOption {
   id: string;
@@ -12,48 +25,55 @@ export interface GeminiModelOption {
   description: string;
 }
 
+/** Text-output models that accept image input and work with this application. */
 export const GEMINI_MODELS: GeminiModelOption[] = [
+  {
+    id: "gemini-3.7-flash",
+    label: "Gemini 3.7 Flash",
+    tag: "ថ្មីបំផុត • ណែនាំ",
+    description: "ម៉ូដែល Flash ថ្មីបំផុត — លឿន ឆ្លាត និងវិភាគពហុមេឌៀបានល្អ",
+  },
   {
     id: "gemini-3.6-flash",
     label: "Gemini 3.6 Flash",
-    tag: "ថ្មីបំផុត • ណែនាំ",
-    description: "ជំនាន់ទី 3 ថ្មីបំផុត — ឆ្លាតបំផុតសម្រាប់ Flash លឿន + វិភាគស៊ីជម្រៅ",
+    tag: "មានស្ថេរភាព",
+    description: "តុល្យភាពល្អរវាងល្បឿន គុណភាព និងការវិភាគរូបភាព",
   },
   {
-    id: "gemini-3.1-flash",
-    label: "Gemini 3.1 Flash",
-    tag: "ថ្មី",
-    description: "ជំនាន់ទី 3 — លឿន + ឆ្លាត ជំនាន់ថ្មី សម្រាប់ការសម្រាយរឿងគុណភាពខ្ពស់",
+    id: "gemini-3.5-flash",
+    label: "Gemini 3.5 Flash",
+    tag: "មានស្ថេរភាព",
+    description: "ស័ក្តិសមសម្រាប់ការងារទូទៅដែលត្រូវការល្បឿន និងគុណភាពល្អ",
+  },
+  {
+    id: "gemini-3.5-flash-lite",
+    label: "Gemini 3.5 Flash-Lite",
+    tag: "លឿនបំផុត",
+    description: "លឿន និងសន្សំសំចៃ — ស័ក្តិសមសម្រាប់វីដេអូខ្លីៗ",
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    label: "Gemini 3.1 Flash-Lite",
+    tag: "សន្សំសំចៃ",
+    description: "ម៉ូដែលតូចដែលមានស្ថេរភាព និងចំណាយទាប",
   },
   {
     id: "gemini-2.5-flash",
     label: "Gemini 2.5 Flash",
-    tag: "ណែនាំ",
-    description: "លឿន + ឆ្លាត — តុល្យភាពល្អបំផុតរវាងល្បឿន និងគុណភាព",
+    tag: "ជំនាន់មុន",
+    description: "ម៉ូដែលជំនាន់ 2.5 ដែលមានស្ថេរភាព និងប្រើបានទូទៅ",
   },
   {
     id: "gemini-2.5-flash-lite",
     label: "Gemini 2.5 Flash-Lite",
-    tag: "លឿនបំផុត",
-    description: "លឿន និងសន្សំសំចៃតម្លៃ — ស័ក្តិសមសម្រាប់វីដេអូខ្លីៗ",
-  },
-  {
-    id: "gemini-2.0-flash",
-    label: "Gemini 2.0 Flash",
-    tag: "លំនាំដើម",
-    description: "ម៉ូដែលលំនាំដើម — មានស្ថេរភាព ប្រើបានទូទៅ",
+    tag: "ជំនាន់មុន • សន្សំសំចៃ",
+    description: "ជម្រើសចំណាយទាបសម្រាប់ការវិភាគដែលមិនស្មុគស្មាញ",
   },
   {
     id: "gemini-2.5-pro",
     label: "Gemini 2.5 Pro",
     tag: "គុណភាពខ្ពស់",
-    description: "វិភាគរឿងស៊ីជម្រៅបំផុត ប៉ុន្តែយឺតជាង Flash",
-  },
-  {
-    id: "gemini-1.5-flash",
-    label: "Gemini 1.5 Flash",
-    tag: "Legacy",
-    description: "ម៉ូដែលជំនាន់មុន — សម្រាប់ភាពត្រូវគ្នាចាស់ៗ",
+    description: "វិភាគរឿងស៊ីជម្រៅ ប៉ុន្តែយឺត និងចំណាយច្រើនជាង Flash",
   },
 ];
 
