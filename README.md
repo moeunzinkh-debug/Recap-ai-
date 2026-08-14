@@ -2,6 +2,8 @@
 
 A Khmer-language anime and movie recap script generator. The application extracts timestamped JPEG frames from an uploaded video with FFmpeg, streams them to Gemini, and stores the generated script in PostgreSQL.
 
+> **Google AI Studio users:** this Next.js app needs a Node.js server, FFmpeg, and PostgreSQL, so it cannot run inside AI Studio Build. A browser-only version that works on AI Studio (canvas frame extraction + direct Gemini calls + localStorage) lives in [`aistudio/`](./aistudio/README.md).
+
 ## Features
 
 - Upload validation: video files up to 100 MB and 10 minutes

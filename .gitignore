@@ -31,3 +31,6 @@ next-env.d.ts
 *.pem
 .vscode/
 .idea/
+
+# local dev helpers (sandbox only)
+/.local-dev/
