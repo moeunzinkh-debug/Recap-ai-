@@ -3,22 +3,28 @@ import { Pool } from "pg";
 
 const databaseUrl = process.env.DATABASE_URL;
 
-if (!databaseUrl) {
-  throw new Error("DATABASE_URL is required");
-}
-
 const globalForDb = globalThis as typeof globalThis & {
-  __arenaNextJsPostgresqlPool?: Pool;
+  __recapAiPostgresqlPool?: Pool;
 };
 
+// Creating a Pool does not open a connection. Keeping initialization lazy lets
+// Next.js inspect route modules during `next build` without requiring runtime
+// credentials. The proxy below still gives a clear error before the first query.
 export const pool =
-  globalForDb.__arenaNextJsPostgresqlPool ??
-  new Pool({
-    connectionString: databaseUrl,
-  });
+  globalForDb.__recapAiPostgresqlPool ??
+  new Pool(databaseUrl ? { connectionString: databaseUrl } : undefined);
 
 if (process.env.NODE_ENV !== "production") {
-  globalForDb.__arenaNextJsPostgresqlPool = pool;
+  globalForDb.__recapAiPostgresqlPool = pool;
 }
 
-export const db = drizzle(pool);
+const drizzleClient = drizzle(pool);
+
+export const db: typeof drizzleClient = new Proxy(drizzleClient, {
+  get(target, property, receiver) {
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL is required");
+    }
+    return Reflect.get(target, property, receiver);
+  },
+});

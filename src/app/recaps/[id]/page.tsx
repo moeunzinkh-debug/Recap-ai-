@@ -20,8 +20,13 @@ import CopyButton from "@/components/CopyButton";
 
 export const dynamic = "force-dynamic";
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  if (!UUID_REGEX.test(id)) return { title: "រកមិនឃើញស្គ្រីប" };
+
   const [row] = await db.select().from(recaps).where(eq(recaps.id, id)).limit(1);
   return {
     title: row?.title ? `${row.title} — ស្គ្រីបសម្រាយរឿង` : "ស្គ្រីបសម្រាយរឿង",
@@ -34,6 +39,8 @@ export default async function RecapDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  if (!UUID_REGEX.test(id)) notFound();
+
   const [row] = await db.select().from(recaps).where(eq(recaps.id, id)).limit(1);
 
   if (!row) notFound();

@@ -24,6 +24,8 @@ import ScriptRenderer from "@/components/ScriptRenderer";
 import {
   MAX_FILE_SIZE,
   MAX_DURATION_SEC,
+  MIN_DURATION_SEC,
+  VIDEO_EXTENSIONS,
   MODEL,
   formatBytes,
   formatDuration,
@@ -123,7 +125,11 @@ export default function UploadZone() {
   const validateFile = useCallback((f: File) => {
     setMetaError(null);
 
-    if (!f.type.startsWith("video/")) {
+    const lowerName = f.name.toLowerCase();
+    const hasVideoExtension = VIDEO_EXTENSIONS.some((extension) =>
+      lowerName.endsWith(extension)
+    );
+    if (!f.type.toLowerCase().startsWith("video/") && !hasVideoExtension) {
       setMetaError("សូមជ្រើសរើសតែឯកសារវីដេអូ (MP4, WebM, MOV, MKV...)។");
       setFile(null);
       return;
@@ -160,68 +166,16 @@ export default function UploadZone() {
       setFile(null);
       return;
     }
-    if (d < 3) {
-      setMetaError("វីដេអូខ្លីពេក (ត្រូវការយ៉ាងតិច 3 វិនាទី)។");
+    if (d < MIN_DURATION_SEC) {
+      setMetaError(
+        `វីដេអូខ្លីពេក (ត្រូវការយ៉ាងតិច ${MIN_DURATION_SEC} វិនាទី)។`
+      );
       setFile(null);
       return;
     }
     setMetaError(null);
     setProgress((p) => ({ ...p, phase: "idle" }));
   }, []);
-
-  const startAnalysis = useCallback(() => {
-    if (!file || !duration || busy) return;
-
-    const form = new FormData();
-    form.append("video", file);
-    form.append("duration", String(Math.round(duration)));
-    form.append("model", selectedModel);
-
-    const xhr = new XMLHttpRequest();
-    xhrRef.current = xhr;
-    let buffer = "";
-    let processedLen = 0;
-
-    setProgress({
-      phase: "uploading",
-      uploadPercent: 0,
-      stageMessage: "កំពុងបញ្ជូនឯកសារទៅម៉ាស៊ីនបម្រើ...",
-      script: "",
-      recapId: null,
-      title: null,
-      error: null,
-    });
-
-    xhr.open("POST", "/api/analyze");
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        setProgress((p) => ({ ...p, uploadPercent: pct }));
-      }
-    };
-
-    xhr.onreadystatechange = () => {
-      const text = xhr.responseText || "";
-      if (text.length > processedLen) {
-        buffer += text.slice(processedLen);
-        const { events, rest } = parseSSE(buffer);
-        buffer = rest;
-        processedLen = text.length - rest.length;
-        handleEvents(events);
-      }
-    };
-
-    xhr.onerror = () => {
-      setProgress((p) => ({
-        ...p,
-        phase: "error",
-        error: "បរាជ័យក្នុងការផ្ញើឯកសារ។ សូមពិនិត្យបណ្ដាញ ហើយព្យាយាមម្ដងទៀត។",
-      }));
-    };
-
-    xhr.send(form);
-  }, [file, duration, busy, selectedModel]);
 
   const handleEvents = useCallback((events: SSEEvent[]) => {
     for (const ev of events) {
@@ -254,6 +208,80 @@ export default function UploadZone() {
       }
     }
   }, []);
+
+  const startAnalysis = useCallback(() => {
+    if (!file || !duration || busy) return;
+
+    const form = new FormData();
+    form.append("video", file);
+    form.append("model", selectedModel);
+
+    const xhr = new XMLHttpRequest();
+    xhrRef.current = xhr;
+    let buffer = "";
+    let receivedLength = 0;
+    let terminalEventReceived = false;
+
+    setProgress({
+      phase: "uploading",
+      uploadPercent: 0,
+      stageMessage: "កំពុងបញ្ជូនឯកសារទៅម៉ាស៊ីនបម្រើ...",
+      script: "",
+      recapId: null,
+      title: null,
+      error: null,
+    });
+
+    xhr.open("POST", "/api/analyze");
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded / e.total) * 100);
+        setProgress((p) => ({ ...p, uploadPercent: pct }));
+      }
+    };
+
+    xhr.onreadystatechange = () => {
+      const text = xhr.responseText || "";
+      if (text.length > receivedLength) {
+        buffer += text.slice(receivedLength);
+        receivedLength = text.length;
+        const { events, rest } = parseSSE(buffer);
+        buffer = rest;
+        terminalEventReceived ||= events.some(
+          (event) => event.event === "done" || event.event === "error"
+        );
+        handleEvents(events);
+      }
+    };
+
+    xhr.onerror = () => {
+      setProgress((p) => ({
+        ...p,
+        phase: "error",
+        error: "បរាជ័យក្នុងការផ្ញើឯកសារ។ សូមពិនិត្យបណ្ដាញ ហើយព្យាយាមម្ដងទៀត។",
+      }));
+    };
+
+    xhr.onload = () => {
+      if (!terminalEventReceived) {
+        setProgress((p) => ({
+          ...p,
+          phase: "error",
+          error:
+            xhr.status >= 400
+              ? `ម៉ាស៊ីនបម្រើឆ្លើយតបដោយកំហុស (${xhr.status})។ សូមព្យាយាមម្ដងទៀត។`
+              : "ការតភ្ជាប់បានបញ្ចប់មុនពេលទទួលលទ្ធផល។ សូមព្យាយាមម្ដងទៀត។",
+        }));
+      }
+    };
+
+    xhr.onloadend = () => {
+      if (xhrRef.current === xhr) xhrRef.current = null;
+    };
+
+    xhr.send(form);
+  }, [file, duration, busy, selectedModel, handleEvents]);
 
   const reset = useCallback(() => {
     xhrRef.current?.abort();

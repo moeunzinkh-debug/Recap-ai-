@@ -11,6 +11,8 @@ import {
   MODEL,
   MAX_FILE_SIZE,
   MAX_DURATION_SEC,
+  MIN_DURATION_SEC,
+  VIDEO_EXTENSIONS,
   isKnownGeminiModel,
   GEMINI_MODELS,
 } from "@/lib/constants";
@@ -19,7 +21,6 @@ export const runtime = "nodejs";
 export const maxDuration = 600; // allow long-running analysis (10 min)
 
 const ALLOWED_MIME_PREFIXES = ["video/"];
-const ALLOWED_EXTENSIONS = [".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg", ".ogv", ".3gp"];
 
 function sse(data: string, event?: string): Uint8Array {
   const payload = event ? `event: ${event}\ndata: ${data}\n\n` : `data: ${data}\n\n`;
@@ -27,8 +28,6 @@ function sse(data: string, event?: string): Uint8Array {
 }
 
 export async function POST(request: Request) {
-  const encoder = new TextEncoder();
-
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (data: unknown, event?: string) => {
@@ -43,9 +42,16 @@ export async function POST(request: Request) {
       let recordId: string | null = null;
 
       try {
+        const contentLength = Number(request.headers.get("content-length") || 0);
+        if (
+          Number.isFinite(contentLength) &&
+          contentLength > MAX_FILE_SIZE + 1024 * 1024
+        ) {
+          throw new Error("ទំហំឯកសារដែលបានផ្ញើធំពេក — អតិបរមា 100MB។");
+        }
+
         const formData = await request.formData();
         const file = formData.get("video");
-        const clientDuration = Number(formData.get("duration") || 0);
 
         // Chosen Gemini model (validated against the known list)
         const requestedModel = String(formData.get("model") || "").trim();
@@ -70,7 +76,7 @@ export async function POST(request: Request) {
         const isVideo =
           ALLOWED_MIME_PREFIXES.some((p) => lowerType.startsWith(p)) ||
           (lowerType === "" || lowerType === "application/octet-stream"
-            ? ALLOWED_EXTENSIONS.some((ext) => lowerName.endsWith(ext))
+            ? VIDEO_EXTENSIONS.some((ext) => lowerName.endsWith(ext))
             : false);
         if (!isVideo) {
           throw new Error("ឯកសារនេះមិនមែនជាវីដេអូទេ (ទទួលតែ MP4, WebM, MOV, MKV...)។");
@@ -79,20 +85,22 @@ export async function POST(request: Request) {
         send({ stage: "probe", message: "កំពុងទទួលឯកសារ និងពិនិត្យវីដេអូ..." }, "progress");
 
         // Save the uploaded video to a temp file
-        const ext = path.extname(file.name) || ".mp4";
+        const fileExtension = path.extname(file.name).toLowerCase();
+        const ext = VIDEO_EXTENSIONS.some((candidate) => candidate === fileExtension)
+          ? fileExtension
+          : ".mp4";
         tmpVideo = path.join(os.tmpdir(), `recap-video-${randomUUID()}${ext}`);
         const buffer = Buffer.from(await file.arrayBuffer());
         await fs.writeFile(tmpVideo, buffer);
 
-        // Determine duration (client-reported first, then probe)
-        let durationSec = Number.isFinite(clientDuration) && clientDuration > 0
-          ? clientDuration
-          : await probeDuration(tmpVideo);
-
+        // Always verify duration server-side; client metadata is not trusted.
+        let durationSec: number;
         try {
           durationSec = await probeDuration(tmpVideo);
         } catch {
-          // keep client value as fallback
+          throw new Error(
+            "មិនអាចអានព័ត៌មានវីដេអូនេះបានទេ។ ឯកសារអាចខូច ឬទ្រង់ទ្រាយមិនគាំទ្រ។"
+          );
         }
 
         if (durationSec > MAX_DURATION_SEC + 1) {
@@ -100,8 +108,10 @@ export async function POST(request: Request) {
             `វីដេអូវែងជាង 10 នាទី (${Math.round(durationSec / 60)} នាទី) — សូមកាត់វីដេអូឲ្យខ្លីជាង 10 នាទីសិន។`
           );
         }
-        if (durationSec < 2) {
-          throw new Error("វីដេអូខ្លីពេក (ត្រូវការយ៉ាងតិច 3 វិនាទី)។");
+        if (durationSec < MIN_DURATION_SEC) {
+          throw new Error(
+            `វីដេអូខ្លីពេក (ត្រូវការយ៉ាងតិច ${MIN_DURATION_SEC} វិនាទី)។`
+          );
         }
 
         // Create DB record

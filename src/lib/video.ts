@@ -11,27 +11,36 @@ const execFileAsync = promisify(execFile);
 
 function run(cmd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error(stderr || err.message));
-        return;
+    execFile(
+      cmd,
+      args,
+      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 5 * 60_000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(stderr || err.message));
+          return;
+        }
+        resolve(stdout);
       }
-      resolve(stdout);
-    });
+    );
   });
 }
 
 export async function probeDuration(videoPath: string): Promise<number> {
   if (!ffprobe?.path) throw new Error("ffprobe binary not found");
-  const { stdout } = await execFileAsync(ffprobe.path, [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    videoPath,
-  ]);
+  const { stdout } = await execFileAsync(
+    ffprobe.path,
+    [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      videoPath,
+    ],
+    { encoding: "utf8", timeout: 30_000 }
+  );
   const seconds = parseFloat(stdout.trim());
   if (!Number.isFinite(seconds) || seconds <= 0) {
     throw new Error("Could not read video duration");
@@ -74,12 +83,12 @@ export async function extractFrames(
       "-q:v",
       "4",
       "-frames:v",
-      String(MAX_FRAMES + 1),
+      String(MAX_FRAMES),
       pattern,
     ]);
 
     const files = (await fs.readdir(dir))
-      .filter((f) => f.endsWith(".jpg"))
+      .filter((file) => file.endsWith(".jpg"))
       .sort();
 
     if (files.length === 0) {
@@ -88,14 +97,14 @@ export async function extractFrames(
 
     const frames: ExtractedFrames["frames"] = [];
     const total = files.length;
-    for (let i = 0; i < files.length; i++) {
-      const buf = await fs.readFile(path.join(dir, files[i]));
+    for (let index = 0; index < files.length; index++) {
+      const buffer = await fs.readFile(path.join(dir, files[index]));
       frames.push({
-        base64: buf.toString("base64"),
-        timeSec: i * interval,
-        index: i,
+        base64: buffer.toString("base64"),
+        timeSec: index * interval,
+        index,
       });
-      onProgress?.(i + 1, total);
+      onProgress?.(index + 1, total);
     }
 
     return { frames, intervalSec: interval, count: frames.length };

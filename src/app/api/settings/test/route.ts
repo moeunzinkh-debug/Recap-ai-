@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { getGeminiKey } from "@/lib/gemini";
+import { MODEL } from "@/lib/constants";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,11 +28,17 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+  if (apiKey.length > 512) {
+    return NextResponse.json(
+      { ok: false, message: "API Key វែងពេក — អតិបរមា 512 តួអក្សរ។" },
+      { status: 400 }
+    );
+  }
 
   try {
     const ai = new GoogleGenAI({ apiKey });
     const res = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: MODEL,
       contents: "Reply with exactly: OK",
     });
     const text = (res.text || "").trim();
