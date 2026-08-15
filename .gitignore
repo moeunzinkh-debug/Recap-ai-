@@ -34,3 +34,7 @@ next-env.d.ts
 
 # local dev helpers (sandbox only)
 /.local-dev/
+
+# Cloudflare Worker local files
+worker/node_modules/
+worker/.wrangler/

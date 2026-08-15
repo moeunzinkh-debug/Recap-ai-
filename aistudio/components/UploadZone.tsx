@@ -29,7 +29,7 @@ import {
 } from "../lib/constants";
 import { extractFrames } from "../lib/frames";
 import { GeminiError, streamRecapScript } from "../lib/gemini";
-import { getEffectiveApiKey, saveRecap, type RecapRecord } from "../lib/storage";
+import { saveRecap, type RecapRecord } from "../lib/storage";
 
 type Phase = "idle" | "validating" | "processing" | "streaming" | "done" | "error";
 
@@ -47,10 +47,8 @@ function extractTitle(script: string): string {
 }
 
 export default function UploadZone({
-  keyVersion,
   onSaved,
 }: {
-  keyVersion: number;
   onSaved: (record: RecapRecord) => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
@@ -72,8 +70,8 @@ export default function UploadZone({
     error: null,
   });
 
-  const { source: keySource } = getEffectiveApiKey();
-  const geminiConfigured = keySource !== "none";
+  // The API key is held as a Cloudflare Worker secret, not in the browser.
+  const geminiConfigured = true;
 
   const selectedModelInfo = GEMINI_MODELS.find((m) => m.id === selectedModel) ?? null;
   const phase = progress.phase;
@@ -156,17 +154,6 @@ export default function UploadZone({
   const startAnalysis = useCallback(async () => {
     if (!file || !duration || busy) return;
 
-    const { key } = getEffectiveApiKey();
-    if (!key) {
-      setProgress((p) => ({
-        ...p,
-        phase: "error",
-        error:
-          "រកមិនឃើញ Gemini API Key ទេ។ សូមបញ្ចូល Key ក្នុងផ្នែក API Key ខាងលើជាមុនសិន។",
-      }));
-      return;
-    }
-
     cancelledRef.current = false;
     setCopied(false);
     setProgress({
@@ -201,7 +188,6 @@ export default function UploadZone({
         frames,
         intervalSec,
         model: selectedModel,
-        apiKey: key,
       })) {
         if (cancelledRef.current) return;
         script += chunk;

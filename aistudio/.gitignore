@@ -1,5 +1,8 @@
 node_modules/
-dist/
+# The production Worker is deployed directly from this static bundle.
+# Refresh it with: cd aistudio && npm run build
+!dist/
+!dist/**
 .env
 .env.local
 *.local

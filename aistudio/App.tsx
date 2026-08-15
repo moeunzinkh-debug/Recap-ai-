@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from "react";
 import { Clapperboard, Github, Sparkles } from "lucide-react";
-import ApiKeyPanel from "./components/ApiKeyPanel";
 import UploadZone from "./components/UploadZone";
 import HistoryPanel from "./components/HistoryPanel";
 
@@ -8,11 +7,8 @@ type Tab = "create" | "history";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("create");
-  // Bump these counters to force children to re-read localStorage.
-  const [keyVersion, setKeyVersion] = useState(0);
+  // Bump this counter to force the local history panel to re-read storage.
   const [historyVersion, setHistoryVersion] = useState(0);
-
-  const onKeyChanged = useCallback(() => setKeyVersion((v) => v + 1), []);
   const onHistoryChanged = useCallback(() => setHistoryVersion((v) => v + 1), []);
 
   return (
@@ -78,8 +74,10 @@ export default function App() {
               </p>
             </div>
 
-            <ApiKeyPanel onChanged={onKeyChanged} />
-            <UploadZone keyVersion={keyVersion} onSaved={onHistoryChanged} />
+            <div className="mb-4 rounded-2xl bg-emerald-400/10 p-4 text-sm text-emerald-200 ring-1 ring-emerald-400/25">
+              Gemini API Key ត្រូវបានរក្សាទុកដោយសុវត្ថិភាពជា Cloudflare Worker Secret។ វាមិនត្រូវបានផ្ញើទៅ Browser ទេ។
+            </div>
+            <UploadZone onSaved={onHistoryChanged} />
           </>
         ) : (
           <HistoryPanel version={historyVersion} onChanged={onHistoryChanged} />
@@ -90,8 +88,7 @@ export default function App() {
       <footer className="border-t border-slate-800/70 py-6">
         <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-center gap-2 px-4 text-xs text-slate-500 sm:px-6">
           <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-          Recap AI — ដំណើរការទាំងស្រុងក្នុង Browser (គ្មាន Server) • ស័ក្តិសមសម្រាប់ Google AI
-          Studio
+          Recap AI — Frames ដកក្នុង Browser • Gemini ដំណើរការតាម Cloudflare Worker
           <a
             href="https://github.com/moeunzinkh-debug/Recap-ai-"
             target="_blank"

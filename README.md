@@ -2,7 +2,7 @@
 
 A Khmer-language anime and movie recap script generator. The application extracts timestamped JPEG frames from an uploaded video with FFmpeg, streams them to Gemini, and stores the generated script in PostgreSQL.
 
-> **Google AI Studio users:** this Next.js app needs a Node.js server, FFmpeg, and PostgreSQL, so it cannot run inside AI Studio Build. A browser-only version that works on AI Studio (canvas frame extraction + direct Gemini calls + localStorage) lives in [`aistudio/`](./aistudio/README.md).
+> **Cloudflare Workers deployment:** a Worker-ready application now lives in [`worker/`](./worker/). It serves the Vite client in [`aistudio/`](./aistudio/) and keeps the Gemini key in a Worker Secret. Video frames are extracted in the browser with canvas, because Workers cannot run FFmpeg or write temporary files.
 
 ## Features
 
@@ -69,7 +69,42 @@ Open <http://localhost:3000>. If `GEMINI_API_KEY` is not set in the environment,
 | `npm run db:push` | Push the schema directly to PostgreSQL |
 | `npm run db:studio` | Open Drizzle Studio |
 
-## Deployment notes
+## Cloudflare Workers deployment
+
+The original Next.js application above remains available for Node.js + PostgreSQL deployments. For Cloudflare Workers, use the Worker application instead. It does **not** upload the source video to Cloudflare: the browser decodes the video, extracts compressed JPEG frames, and sends only those frames to the Worker. The Worker proxies the streaming Gemini response, so `GEMINI_API_KEY` never reaches the browser.
+
+```bash
+cd aistudio
+npm install
+npm run build
+cd ../worker
+npm install
+npx wrangler login
+npx wrangler secret put GEMINI_API_KEY
+npm run deploy
+```
+
+For local development, build the client once, then run the Worker:
+
+```bash
+cd aistudio && npm run build
+cd ../worker && npm run dev
+```
+
+Open the Worker URL printed by Wrangler. The Worker serves `aistudio/dist` as static assets and provides:
+
+- `POST /api/analyze` — validates extracted frames and streams Gemini SSE
+- `GET /api/health` — deployment/key configuration health check
+
+The browser keeps recap history in `localStorage`. This deliberately removes Node-only FFmpeg, filesystem, PostgreSQL, and server-side encryption dependencies from the Cloudflare path. Do not use the Worker publicly without access control: any visitor can consume your Gemini quota.
+
+### Important limits
+
+- Browser canvas extraction only supports codecs the visitor's browser can decode (MP4/H.264 and WebM are safest).
+- The current UI accepts videos up to 100 MB / 10 minutes, but the actual request consists of extracted JPEG frames. If requests exceed your Cloudflare plan limits, reduce `MAX_FRAMES`, `FRAME_WIDTH`, or JPEG quality in `aistudio/lib/constants.ts`.
+- Set the secret with Wrangler; never set `GEMINI_API_KEY` through Vite environment variables, which would expose it in the client bundle.
+
+## Node.js deployment notes
 
 - Use the Node.js runtime; FFmpeg processing is not compatible with an Edge runtime.
 - The host must allow temporary-file writes and include enough memory for a 100 MB upload plus extracted frames.
