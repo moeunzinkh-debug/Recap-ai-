@@ -1,0 +1,86 @@
+export interface Env {
+  /** Set with: npx wrangler secret put GEMINI_API_KEY */
+  GEMINI_API_KEY: string;
+}
+
+type Frame = { base64: string; timeSec: number };
+type AnalyzeInput = {
+  fileName: string;
+  durationSec: number;
+  intervalSec: number;
+  model: string;
+  frames: Frame[];
+};
+
+const MODELS = new Set([
+  "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
+  "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash",
+  "gemini-2.5-flash-lite", "gemini-2.5-pro",
+]);
+const MAX_FRAMES = 110;
+const MAX_IMAGE_BASE64_CHARS = 1_500_000;
+
+function json(body: unknown, status = 200): Response {
+  return Response.json(body, { status, headers: { "cache-control": "no-store" } });
+}
+function clock(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
+}
+function prompt(input: AnalyzeInput): string {
+  return `អ្នកគឺជាអ្នកជំនាញសរសេរ Script សម្រាយរឿង Anime និងភាពយន្តជាភាសាខ្មែរ។ ខ្ញុំនឹងផ្ញើ Frames ចំនួន ${input.frames.length} សន្លឹកពីវីដេអូ "${input.fileName}" តាមលំដាប់ពេលវេលា រាល់ប្រហែល ${input.intervalSec.toFixed(1)} វិនាទី។ មើលវាតាមលំដាប់ ហើយសរសេរស្គ្រីបសម្រាយរឿងជាភាសាខ្មែរទាំងស្រុង។
+
+ត្រូវរៀបរាប់តាមលំដាប់ហេតុការណ៍ ផ្ដោតលើ Core Plot សកម្មភាពសំខាន់ និងចំណុចកំប្លែង។ ណែនាំតួអង្គពេលបង្ហាញខ្លួនដំបូង; បើមិនដឹងឈ្មោះ សូមពណ៌នារូបរាង។ ប្រើប្រយោគខ្លី ងាយយល់ មានចង្វាក់លឿន និងអារម្មណ៍រស់រវើក។
+
+ទម្រង់ចម្លើយត្រូវតែមាន៖
+- ជួរទីមួយ៖ ## ចំណងជើង៖ <ចំណងជើងទាក់ទាញជាភាសាខ្មែរ>
+- ជួរទីពីរ៖ **រយៈពេលវីដេអូ៖** ${Math.floor(input.durationSec / 60)}:${Math.round(input.durationSec % 60).toString().padStart(2, "0")} នាទី | **Frames វិភាគ៖** ${input.frames.length}
+- បែងចែកឈុតជា ### [MM:SS – MM:SS] ចំណងជើងឈុត ហើយពណ៌នាមួយឈុត ៣–៦ ប្រយោគ
+- បញ្ចប់ដោយ ### សង្ខេបសាច់រឿង។`;
+}
+
+function generationConfig(model: string): Record<string, unknown> {
+  return model.startsWith("gemini-3.")
+    ? { maxOutputTokens: 8192, thinkingConfig: { thinkingLevel: "low" } }
+    : { temperature: 0.9, topP: 0.95, maxOutputTokens: 8192 };
+}
+
+async function analyze(request: Request, env: Env): Promise<Response> {
+  if (!env.GEMINI_API_KEY) return json({ error: "GEMINI_API_KEY is not configured." }, 503);
+  let input: AnalyzeInput;
+  try { input = await request.json<AnalyzeInput>(); } catch { return json({ error: "Invalid JSON body." }, 400); }
+  if (!input || !MODELS.has(input.model) || !Number.isFinite(input.durationSec) || input.durationSec < 3 || input.durationSec > 600 || !Array.isArray(input.frames) || input.frames.length < 1 || input.frames.length > MAX_FRAMES) {
+    return json({ error: "Invalid analysis request." }, 400);
+  }
+  if (typeof input.fileName !== "string" || input.fileName.length > 255 || !Number.isFinite(input.intervalSec)) return json({ error: "Invalid video metadata." }, 400);
+  for (const frame of input.frames) {
+    if (!frame || typeof frame.base64 !== "string" || frame.base64.length === 0 || frame.base64.length > MAX_IMAGE_BASE64_CHARS || !Number.isFinite(frame.timeSec)) return json({ error: "Invalid frame data." }, 400);
+  }
+  const parts: Record<string, unknown>[] = [{ text: prompt(input) }];
+  input.frames.forEach((frame, index) => parts.push(
+    { text: `Frame ${index + 1}/${input.frames.length} — ${clock(frame.timeSec)}` },
+    { inlineData: { mimeType: "image/jpeg", data: frame.base64 } },
+  ));
+  const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
+    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: generationConfig(input.model) }),
+  });
+  if (!upstream.ok || !upstream.body) {
+    const detail = (await upstream.text()).slice(0, 300);
+    return json({ error: `Gemini API error (${upstream.status}).`, detail }, upstream.status);
+  }
+  return new Response(upstream.body, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff" } });
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/api/health") return json({ ok: true, geminiConfigured: Boolean(env.GEMINI_API_KEY) });
+    if (url.pathname === "/api/analyze") {
+      if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
+      return analyze(request, env);
+    }
+    return new Response("Not found", { status: 404 });
+  },
+} satisfies ExportedHandler<Env>;
