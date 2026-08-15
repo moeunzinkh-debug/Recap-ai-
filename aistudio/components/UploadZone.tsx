@@ -32,6 +32,7 @@ import {
   getAnalysisState,
   isBusyPhase,
   resetAnalysis as resetSharedAnalysis,
+  retryAnalysis as retrySharedAnalysis,
   startAnalysis as startSharedAnalysis,
   subscribeAnalysis,
 } from "../lib/analysisStore";
@@ -154,6 +155,24 @@ export default function UploadZone({
     setCopied(false);
     startSharedAnalysis(file, duration, selectedModel);
   }, [file, duration, busy, geminiConfigured, selectedModel]);
+
+  // Re-run the same video. Falls back to clearing the form if the previous
+  // request is no longer available (for example after a page reload).
+  const retry = useCallback(() => {
+    setCopied(false);
+    if (retrySharedAnalysis()) return;
+    if (file && duration) {
+      startSharedAnalysis(file, duration, selectedModel);
+      return;
+    }
+    resetSharedAnalysis();
+    setFile(null);
+    setDuration(null);
+    setMetaError(null);
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setVideoUrl(null);
+    if (inputRef.current) inputRef.current.value = "";
+  }, [file, duration, selectedModel, videoUrl]);
 
   const reset = useCallback(() => {
     resetSharedAnalysis();
@@ -439,13 +458,22 @@ export default function UploadZone({
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={reset}
-            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 ring-1 ring-slate-700 transition hover:bg-slate-700"
-          >
-            <RefreshCw className="h-4 w-4" /> ព្យាយាមម្ដងទៀត
-          </button>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={retry}
+              className="inline-flex items-center gap-2 rounded-xl bg-amber-400 px-4 py-2 text-sm font-bold text-slate-950 transition hover:brightness-110"
+            >
+              <RefreshCw className="h-4 w-4" /> ព្យាយាមម្ដងទៀត
+            </button>
+            <button
+              type="button"
+              onClick={reset}
+              className="inline-flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 ring-1 ring-slate-700 transition hover:bg-slate-700"
+            >
+              <Trash2 className="h-4 w-4" /> ជ្រើសរើសវីដេអូថ្មី
+            </button>
+          </div>
         </div>
       )}
 
@@ -482,6 +510,12 @@ export default function UploadZone({
               </button>
             </div>
           </div>
+          {progress.warning && (
+            <div className="flex items-start gap-2.5 border-b border-amber-500/20 bg-amber-500/10 px-5 py-3 text-left text-xs text-amber-200">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <span>{progress.warning}</span>
+            </div>
+          )}
           <div className="max-h-[560px] overflow-y-auto p-5 sm:p-7">
             <ScriptRenderer script={progress.script} />
           </div>

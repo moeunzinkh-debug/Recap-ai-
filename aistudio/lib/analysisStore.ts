@@ -17,6 +17,10 @@ export interface AnalysisState {
   title: string | null;
   model: string | null;
   error: string | null;
+  /** True when "ព្យាយាមម្ដងទៀត" can re-run the same video without re-uploading. */
+  canRetry: boolean;
+  /** Set when Gemini stopped early but still produced a usable script. */
+  warning: string | null;
 }
 
 function idleState(): AnalysisState {
@@ -28,6 +32,8 @@ function idleState(): AnalysisState {
     title: null,
     model: null,
     error: null,
+    canRetry: false,
+    warning: null,
   };
 }
 
@@ -40,6 +46,12 @@ let state = idleState();
 let runId = 0;
 let abortController: AbortController | null = null;
 const listeners = new Set<() => void>();
+
+/**
+ * The inputs of the most recent run, so the retry button can restart the same
+ * analysis instead of forcing the user to pick the video again.
+ */
+let lastRequest: { file: File; durationSec: number; model: string } | null = null;
 
 function setState(
   update: Partial<AnalysisState> | ((previous: AnalysisState) => AnalysisState)
@@ -70,6 +82,7 @@ export function startAnalysis(file: File, durationSec: number, model: string): v
   const currentRun = ++runId;
   const controller = new AbortController();
   abortController = controller;
+  lastRequest = { file, durationSec, model };
 
   setState({
     phase: "processing",
@@ -79,6 +92,8 @@ export function startAnalysis(file: File, durationSec: number, model: string): v
     title: null,
     model,
     error: null,
+    canRetry: false,
+    warning: null,
   });
 
   void (async () => {
@@ -100,6 +115,7 @@ export function startAnalysis(file: File, durationSec: number, model: string): v
       }));
 
       let script = "";
+      let finishReason = "";
       for await (const chunk of streamRecapScript(
         {
           fileName: file.name,
@@ -108,7 +124,12 @@ export function startAnalysis(file: File, durationSec: number, model: string): v
           intervalSec,
           model,
         },
-        controller.signal
+        {
+          signal: controller.signal,
+          onFinishReason: (reason) => {
+            finishReason = reason;
+          },
+        }
       )) {
         if (currentRun !== runId || controller.signal.aborted) return;
         script += chunk;
@@ -120,9 +141,20 @@ export function startAnalysis(file: File, durationSec: number, model: string): v
       }
 
       if (currentRun !== runId || controller.signal.aborted) return;
-      if (!script.trim()) {
-        throw new GeminiError("Gemini មិនបានផ្ដល់លទ្ធផលទេ។ សូមព្យាយាមម្ដងទៀត។");
+
+      script = script.trim();
+      // streamRecapScript already raises a specific error for an empty result;
+      // this guards against a response made up only of whitespace.
+      if (!script) {
+        throw new GeminiError(
+          "Gemini មិនបានផ្ដល់លទ្ធផលទេ។ សូមព្យាយាមម្ដងទៀត ឬប្ដូរម៉ូដែលផ្សេង។"
+        );
       }
+
+      const warning =
+        finishReason === "MAX_TOKENS"
+          ? "ស្គ្រីបអាចមិនទាន់ចប់ទេ ព្រោះលទ្ធផលបានដល់ដែនកំណត់ប្រវែងរបស់ម៉ូដែល។"
+          : null;
 
       const title = extractTitle(script);
       const record: RecapRecord = {
@@ -140,21 +172,42 @@ export function startAnalysis(file: File, durationSec: number, model: string): v
       setState((previous) => ({
         ...previous,
         phase: "done",
+        script,
         recapId: record.id,
         title,
+        warning,
         stageMessage: "ស្គ្រីបបានបង្កើតរួចរាល់! 🎉",
       }));
     } catch (error) {
+      // An aborted run was replaced or cancelled on purpose: stay silent.
       if (currentRun !== runId || controller.signal.aborted) return;
+      if (error instanceof DOMException && error.name === "AbortError") return;
+
       const message =
         error instanceof Error
           ? error.message
           : "មានបញ្ហាមិនស្គាល់។ សូមព្យាយាមម្ដងទៀត។";
-      setState((previous) => ({ ...previous, phase: "error", error: message }));
+      setState((previous) => ({
+        ...previous,
+        phase: "error",
+        error: message,
+        canRetry: lastRequest !== null,
+      }));
     } finally {
       if (currentRun === runId) abortController = null;
     }
   })();
+}
+
+/**
+ * Re-run the last analysis with the same video, duration, and model. Returns
+ * false when there is nothing to retry (for example after a full reset).
+ */
+export function retryAnalysis(): boolean {
+  if (isBusyPhase(state.phase) || !lastRequest) return false;
+  const { file, durationSec, model } = lastRequest;
+  startAnalysis(file, durationSec, model);
+  return true;
 }
 
 /** Explicitly cancel the active analysis and clear the shared result. */
@@ -162,6 +215,7 @@ export function resetAnalysis(): void {
   runId += 1;
   abortController?.abort();
   abortController = null;
+  lastRequest = null;
   state = idleState();
   for (const listener of listeners) listener();
 }

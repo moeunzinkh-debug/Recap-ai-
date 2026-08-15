@@ -29,20 +29,42 @@ interface SSEEvent {
   data: string;
 }
 
+// Proxies and servers may terminate SSE events with "\n\n", "\r\n\r\n", or
+// "\r\r". Recognising only "\n\n" leaves every event stuck in the buffer, so
+// the stream appears to produce nothing at all.
+const SSE_DELIMITERS = ["\r\n\r\n", "\n\n", "\r\r"] as const;
+
+function findDelimiter(buf: string): { index: number; length: number } | null {
+  let index = -1;
+  let length = 0;
+  for (const delimiter of SSE_DELIMITERS) {
+    const found = buf.indexOf(delimiter);
+    if (found !== -1 && (index === -1 || found < index)) {
+      index = found;
+      length = delimiter.length;
+    }
+  }
+  return index === -1 ? null : { index, length };
+}
+
 function parseSSE(buf: string): { events: SSEEvent[]; rest: string } {
   const events: SSEEvent[] = [];
   let rest = buf;
-  let idx: number;
-  while ((idx = rest.indexOf("\n\n")) !== -1) {
-    const raw = rest.slice(0, idx);
-    rest = rest.slice(idx + 2);
+  let delimiter = findDelimiter(rest);
+  while (delimiter) {
+    const raw = rest.slice(0, delimiter.index);
+    rest = rest.slice(delimiter.index + delimiter.length);
     let event = "message";
-    let data = "";
-    for (const line of raw.split("\n")) {
+    const data: string[] = [];
+    for (const line of raw.split(/\r\n|\n|\r/)) {
       if (line.startsWith("event:")) event = line.slice(6).trim();
-      else if (line.startsWith("data:")) data += line.slice(5).trim();
+      // Keep newlines between data lines instead of concatenating them, so
+      // multi-line script chunks are not silently glued together.
+      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
     }
-    if (data) events.push({ event, data });
+    const payload = data.join("\n").trim();
+    if (payload) events.push({ event, data: payload });
+    delimiter = findDelimiter(rest);
   }
   return { events, rest };
 }
@@ -87,22 +109,29 @@ export function isBusyPhase(phase: AnalysisPhase): boolean {
 
 function handleEvents(events: SSEEvent[]): void {
   for (const ev of events) {
+    // A malformed payload must not abort the whole stream.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(ev.data);
+    } catch {
+      continue;
+    }
     if (ev.event === "progress") {
-      const data = JSON.parse(ev.data) as { stage: string; message: string };
+      const data = parsed as { stage: string; message: string };
       setState((p) => ({
         ...p,
         phase: data.stage === "gemini" ? "streaming" : "processing",
         stageMessage: data.message,
       }));
     } else if (ev.event === "chunk") {
-      const data = JSON.parse(ev.data) as { text: string };
+      const data = parsed as { text: string };
       setState((p) => ({
         ...p,
         phase: "streaming",
         script: p.script + data.text,
       }));
     } else if (ev.event === "done") {
-      const data = JSON.parse(ev.data) as { id: string; title: string };
+      const data = parsed as { id: string; title: string };
       setState((p) => ({
         ...p,
         phase: "done",
@@ -111,7 +140,7 @@ function handleEvents(events: SSEEvent[]): void {
         stageMessage: "ស្គ្រីបបានបង្កើតរួចរាល់! 🎉",
       }));
     } else if (ev.event === "error") {
-      const data = JSON.parse(ev.data) as { message: string };
+      const data = parsed as { message: string };
       setState((p) => ({ ...p, phase: "error", error: data.message }));
     }
   }
