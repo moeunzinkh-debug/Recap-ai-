@@ -36,4 +36,33 @@ export async function GET(
     );
   }
 }
+
+/** Deletes a single recap by id. */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  if (!UUID_REGEX.test(id)) {
+    return NextResponse.json({ ok: false, error: "Invalid recap ID" }, { status: 400 });
+  }
+
+  try {
+    const result = await db.delete(recaps).where(eq(recaps.id, id));
+    const deleted = result.rowCount ?? 0;
+    if (deleted === 0) {
+      return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json({
+      ok: true,
+      deleted,
+      message: "បានលុបស្គ្រីបរួចរាល់។",
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: err instanceof Error ? err.message : "Failed to delete recap" },
+      { status: 500 }
+    );
+  }
+}
   

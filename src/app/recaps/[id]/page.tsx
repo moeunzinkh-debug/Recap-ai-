@@ -17,6 +17,7 @@ import { recaps } from "@/db/schema";
 import { formatBytes, formatDuration } from "@/lib/constants";
 import ScriptRenderer from "@/components/ScriptRenderer";
 import CopyButton from "@/components/CopyButton";
+import DeleteRecapButton from "@/components/DeleteRecapButton";
 
 export const dynamic = "force-dynamic";
 
@@ -67,7 +68,14 @@ export default async function RecapDetailPage({
                 <span className="truncate">{row.fileName}</span>
               </p>
             </div>
-            {row.status === "done" && row.script && <CopyButton text={row.script} />}
+            <div className="flex flex-wrap items-center gap-2">
+              {row.status === "done" && row.script && <CopyButton text={row.script} />}
+              <DeleteRecapButton
+                id={row.id}
+                title={row.title || row.fileName}
+                redirectTo="/history"
+              />
+            </div>
           </div>
 
           <div className="mt-5 flex flex-wrap gap-2 text-xs">

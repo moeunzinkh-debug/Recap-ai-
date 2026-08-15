@@ -16,6 +16,7 @@ import { db } from "@/db";
 import { recaps } from "@/db/schema";
 import { formatBytes, formatDuration } from "@/lib/constants";
 import ClearHistoryButton from "@/components/ClearHistoryButton";
+import DeleteRecapButton from "@/components/DeleteRecapButton";
 
 export const dynamic = "force-dynamic";
 export const metadata = {
@@ -104,57 +105,64 @@ export default async function HistoryPage() {
             const badge = statusBadge[r.status] ?? statusBadge.failed;
             const Icon = badge.icon;
             return (
-              <Link
+              <div
                 key={r.id}
-                href={`/recaps/${r.id}`}
-                className="group rounded-2xl bg-slate-900/70 p-5 ring-1 ring-slate-800 transition hover:-translate-y-0.5 hover:ring-amber-400/40"
+                className="group relative flex flex-col rounded-2xl bg-slate-900/70 ring-1 ring-slate-800 transition hover:-translate-y-0.5 hover:ring-amber-400/40"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="truncate text-base font-bold text-white">
-                      {r.title || r.fileName}
-                    </h3>
-                    <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-slate-400">
-                      <FileVideo className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">{r.fileName}</span>
-                    </p>
+                <Link href={`/recaps/${r.id}`} className="flex-1 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="truncate text-base font-bold text-white">
+                        {r.title || r.fileName}
+                      </h3>
+                      <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-slate-400">
+                        <FileVideo className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{r.fileName}</span>
+                      </p>
+                    </div>
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${badge.className}`}
+                    >
+                      <Icon
+                        className={`h-3 w-3 ${r.status === "processing" ? "animate-spin" : ""}`}
+                      />
+                      {badge.label}
+                    </span>
                   </div>
-                  <span
-                    className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${badge.className}`}
-                  >
-                    <Icon
-                      className={`h-3 w-3 ${r.status === "processing" ? "animate-spin" : ""}`}
-                    />
-                    {badge.label}
-                  </span>
-                </div>
 
-                <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-400">
-                  <span className="inline-flex items-center gap-1.5">
-                    <Clock className="h-3.5 w-3.5 text-amber-400" /> {formatDuration(r.durationSec)}
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <Layers className="h-3.5 w-3.5 text-amber-400" /> {r.frameCount} Frames
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <CalendarDays className="h-3.5 w-3.5 text-amber-400" />
-                    {new Date(r.createdAt).toLocaleDateString("km-KH", {
-                      day: "2-digit",
-                      month: "short",
-                      year: "numeric",
-                    })}
-                  </span>
-                </div>
+                  <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-400">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-amber-400" /> {formatDuration(r.durationSec)}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <Layers className="h-3.5 w-3.5 text-amber-400" /> {r.frameCount} Frames
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <CalendarDays className="h-3.5 w-3.5 text-amber-400" />
+                      {new Date(r.createdAt).toLocaleDateString("km-KH", {
+                        day: "2-digit",
+                        month: "short",
+                        year: "numeric",
+                      })}
+                    </span>
+                  </div>
+                </Link>
 
-                <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3">
+                <div className="flex items-center justify-between gap-3 border-t border-slate-800 px-5 py-3">
                   <span className="text-[11px] text-slate-500">
                     {formatBytes(r.fileSize)} • {r.model}
                   </span>
-                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-400 transition group-hover:gap-2">
-                    មើលស្គ្រីប <ArrowRight className="h-3.5 w-3.5" />
-                  </span>
+                  <div className="flex items-center gap-2.5">
+                    <Link
+                      href={`/recaps/${r.id}`}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-amber-400 transition group-hover:gap-2"
+                    >
+                      មើលស្គ្រីប <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                    <DeleteRecapButton id={r.id} title={r.title || r.fileName} />
+                  </div>
                 </div>
-              </Link>
+              </div>
             );
           })}
         </div>

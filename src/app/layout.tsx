@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
+import ProcessingBanner from "@/components/ProcessingBanner";
 
 export const metadata: Metadata = {
   title: {
@@ -17,6 +18,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="km">
       <body className="min-h-screen bg-[#0b0d14] text-slate-200 antialiased">
         <Navbar />
+        <ProcessingBanner />
         {children}
         <footer className="border-t border-slate-800/70 py-8">
           <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-center text-xs text-slate-500 sm:flex-row sm:px-6 sm:text-left">
