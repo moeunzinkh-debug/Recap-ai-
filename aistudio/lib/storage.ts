@@ -1,7 +1,4 @@
-/**
- * Browser-side persistence (localStorage) replacing the PostgreSQL layer so
- * the app can run on Google AI Studio without any server or database.
- */
+/** Browser-side persistence used by the Cloudflare Worker client. */
 
 const KEY_STORAGE = "recap-ai:gemini-key";
 const HISTORY_STORAGE = "recap-ai:recaps";
@@ -19,18 +16,6 @@ export interface RecapRecord {
 }
 
 /* ---------- API key ---------- */
-
-/** AI Studio injects the key as process.env.API_KEY; a user-saved key wins. */
-export function getEnvApiKey(): string | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const env = (typeof process !== "undefined" ? (process as any).env : undefined) ?? {};
-    const key = (env.API_KEY || env.GEMINI_API_KEY || "").trim();
-    return key || null;
-  } catch {
-    return null;
-  }
-}
 
 export function getSavedApiKey(): string | null {
   try {
@@ -54,15 +39,6 @@ export function clearApiKey(): void {
   } catch {
     // ignore
   }
-}
-
-/** Effective key: user-saved key first, then the AI Studio environment key. */
-export function getEffectiveApiKey(): { key: string | null; source: "saved" | "env" | "none" } {
-  const saved = getSavedApiKey();
-  if (saved) return { key: saved, source: "saved" };
-  const env = getEnvApiKey();
-  if (env) return { key: env, source: "env" };
-  return { key: null, source: "none" };
 }
 
 export function maskSecret(secret: string): string {

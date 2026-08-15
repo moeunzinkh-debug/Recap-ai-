@@ -2,7 +2,7 @@
 
 A Khmer-language anime and movie recap script generator. The application extracts timestamped JPEG frames from an uploaded video with FFmpeg, streams them to Gemini, and stores the generated script in PostgreSQL.
 
-> **Cloudflare Workers deployment:** a Worker-ready application now lives in [`worker/`](./worker/). It serves the Vite client in [`aistudio/`](./aistudio/) and keeps the Gemini key in a Worker Secret. Video frames are extracted in the browser with canvas, because Workers cannot run FFmpeg or write temporary files.
+> **Cloudflare Workers deployment:** a Worker-ready application lives in [`worker/`](./worker/). It serves the Vite client in [`aistudio/`](./aistudio/), supports either a Cloudflare Worker Secret or a per-browser Gemini key, and extracts video frames in the browser with canvas because Workers cannot run FFmpeg or write temporary files.
 
 ## Features
 
@@ -71,7 +71,7 @@ Open <http://localhost:3000>. If `GEMINI_API_KEY` is not set in the environment,
 
 ## Cloudflare Workers deployment
 
-The original Next.js application above remains available for Node.js + PostgreSQL deployments. For Cloudflare Workers, use the Worker application instead. It does **not** upload the source video to Cloudflare: the browser decodes the video, extracts compressed JPEG frames, and sends only those frames to the Worker. The Worker proxies the streaming Gemini response, so `GEMINI_API_KEY` never reaches the browser.
+The original Next.js application above remains available for Node.js + PostgreSQL deployments. For Cloudflare Workers, use the Worker application instead. It does **not** upload the source video to Cloudflare: the browser decodes the video, extracts compressed JPEG frames, and sends only those frames to the Worker. The Worker proxies the streaming Gemini response. A deployment can use a `GEMINI_API_KEY` Worker Secret (which never reaches the browser), or a user can save a personal key in that browser's `localStorage`; a personal key is sent only to the same-origin Worker over HTTPS when analysis starts.
 
 ```bash
 cd aistudio
@@ -80,6 +80,7 @@ npm run build
 cd ../worker
 npm install
 npx wrangler login
+# Optional shared fallback; users can instead save their own key in the UI:
 npx wrangler secret put GEMINI_API_KEY
 npm run deploy
 ```
@@ -96,13 +97,13 @@ Open the Worker URL printed by Wrangler. The Worker serves `aistudio/dist` as st
 - `POST /api/analyze` — validates extracted frames and streams Gemini SSE
 - `GET /api/health` — deployment/key configuration health check
 
-The browser keeps recap history in `localStorage`. This deliberately removes Node-only FFmpeg, filesystem, PostgreSQL, and server-side encryption dependencies from the Cloudflare path. Do not use the Worker publicly without access control: any visitor can consume your Gemini quota.
+The browser keeps recap history and an optional personal API key in `localStorage`. Analysis runs in a module-level client store, so switching among Create, History, and API Keys does not stop an active job. This deliberately removes Node-only FFmpeg, filesystem, PostgreSQL, and server-side encryption dependencies from the Cloudflare path. If you configure a shared Worker Secret, do not expose the Worker publicly without access control because any visitor can consume that shared Gemini quota.
 
 ### Important limits
 
 - Browser canvas extraction only supports codecs the visitor's browser can decode (MP4/H.264 and WebM are safest).
 - The current UI accepts videos up to 100 MB / 10 minutes, but the actual request consists of extracted JPEG frames. If requests exceed your Cloudflare plan limits, reduce `MAX_FRAMES`, `FRAME_WIDTH`, or JPEG quality in `aistudio/lib/constants.ts`.
-- Set the secret with Wrangler; never set `GEMINI_API_KEY` through Vite environment variables, which would expose it in the client bundle.
+- Set a shared deployment key with Wrangler; never set `GEMINI_API_KEY` through Vite environment variables, which would expose it in the client bundle. Personal keys entered in the UI remain local to that browser and should be removed after use on a shared device.
 
 ## Node.js deployment notes
 

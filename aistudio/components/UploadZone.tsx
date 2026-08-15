@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   AlertTriangle,
   BrainCircuit,
@@ -27,29 +27,25 @@ import {
   formatBytes,
   formatDuration,
 } from "../lib/constants";
-import { extractFrames } from "../lib/frames";
-import { GeminiError, streamRecapScript } from "../lib/gemini";
-import { saveRecap, type RecapRecord } from "../lib/storage";
+import { getSavedApiKey } from "../lib/storage";
+import {
+  getAnalysisState,
+  isBusyPhase,
+  resetAnalysis as resetSharedAnalysis,
+  startAnalysis as startSharedAnalysis,
+  subscribeAnalysis,
+} from "../lib/analysisStore";
 
-type Phase = "idle" | "validating" | "processing" | "streaming" | "done" | "error";
-
-interface ProgressState {
-  phase: Phase;
-  stageMessage: string;
-  script: string;
-  title: string | null;
-  error: string | null;
-}
-
-function extractTitle(script: string): string {
-  const match = script.match(/^##\s*ចំណងជើង៖?\s*(.+)$/m);
-  return (match?.[1] ?? "").trim() || "ស្គ្រីបសម្រាយរឿង";
+interface HealthResponse {
+  geminiConfigured?: boolean;
 }
 
 export default function UploadZone({
-  onSaved,
+  keyVersion,
+  onOpenSettings,
 }: {
-  onSaved: (record: RecapRecord) => void;
+  keyVersion: number;
+  onOpenSettings: () => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -58,30 +54,36 @@ export default function UploadZone({
   const [dragOver, setDragOver] = useState(false);
   const [copied, setCopied] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  const [workerConfigured, setWorkerConfigured] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const scriptRef = useRef<HTMLDivElement>(null);
-  const cancelledRef = useRef(false);
 
-  const [progress, setProgress] = useState<ProgressState>({
-    phase: "idle",
-    stageMessage: "",
-    script: "",
-    title: null,
-    error: null,
-  });
-
-  // The API key is held as a Cloudflare Worker secret, not in the browser.
-  const geminiConfigured = true;
-
-  const selectedModelInfo = GEMINI_MODELS.find((m) => m.id === selectedModel) ?? null;
+  const progress = useSyncExternalStore(
+    subscribeAnalysis,
+    getAnalysisState,
+    getAnalysisState
+  );
   const phase = progress.phase;
-  const busy = phase === "processing" || phase === "streaming";
+  const busy = isBusyPhase(phase);
+  const activeModel = progress.model ?? selectedModel;
+  const selectedModelInfo = GEMINI_MODELS.find((model) => model.id === activeModel) ?? null;
+  const geminiConfigured = Boolean(getSavedApiKey()) || workerConfigured === true;
 
   useEffect(() => {
+    let cancelled = false;
+    setWorkerConfigured(null);
+    void fetch("/api/health", { cache: "no-store" })
+      .then((response) => response.json() as Promise<HealthResponse>)
+      .then((health) => {
+        if (!cancelled) setWorkerConfigured(Boolean(health.geminiConfigured));
+      })
+      .catch(() => {
+        if (!cancelled) setWorkerConfigured(false);
+      });
     return () => {
-      cancelledRef.current = true;
+      cancelled = true;
     };
-  }, []);
+  }, [keyVersion]);
 
   useEffect(() => {
     if (phase === "streaming" && scriptRef.current) {
@@ -90,157 +92,77 @@ export default function UploadZone({
   }, [progress.script, phase]);
 
   const validateFile = useCallback(
-    (f: File) => {
+    (nextFile: File) => {
+      if (busy) return;
       setMetaError(null);
 
-      const lowerName = f.name.toLowerCase();
+      const lowerName = nextFile.name.toLowerCase();
       const hasVideoExtension = VIDEO_EXTENSIONS.some((extension) =>
         lowerName.endsWith(extension)
       );
-      if (!f.type.toLowerCase().startsWith("video/") && !hasVideoExtension) {
+      if (!nextFile.type.toLowerCase().startsWith("video/") && !hasVideoExtension) {
         setMetaError("សូមជ្រើសរើសតែឯកសារវីដេអូ (MP4, WebM, MOV, MKV...)។");
         setFile(null);
         return;
       }
-      if (f.size > MAX_FILE_SIZE) {
+      if (nextFile.size > MAX_FILE_SIZE) {
         setMetaError(
-          `ឯកសារធំជាង 100MB (${formatBytes(f.size)}) — សូមជ្រើសរើសវីដេអូតូចជាងនេះ។`
+          `ឯកសារធំជាង 100MB (${formatBytes(nextFile.size)}) — សូមជ្រើសរើសវីដេអូតូចជាងនេះ។`
         );
         setFile(null);
         return;
       }
-      if (f.size <= 0) {
+      if (nextFile.size <= 0) {
         setMetaError("ឯកសារវីដេអូទទេ។");
         setFile(null);
         return;
       }
 
-      setFile(f);
+      resetSharedAnalysis();
+      setFile(nextFile);
       setDuration(null);
       if (videoUrl) URL.revokeObjectURL(videoUrl);
-      setVideoUrl(URL.createObjectURL(f));
-      setProgress((p) => ({
-        ...p,
-        phase: "validating",
-        script: "",
-        title: null,
-        error: null,
-      }));
+      setVideoUrl(URL.createObjectURL(nextFile));
     },
-    [videoUrl]
+    [busy, videoUrl]
   );
 
   const handleMetadata = useCallback(() => {
-    const vid = document.getElementById("preview-video") as HTMLVideoElement | null;
-    if (!vid || !Number.isFinite(vid.duration)) return;
-    const d = vid.duration;
-    setDuration(d);
-    if (d > MAX_DURATION_SEC + 1) {
+    const video = document.getElementById("preview-video") as HTMLVideoElement | null;
+    if (!video || !Number.isFinite(video.duration)) return;
+    const nextDuration = video.duration;
+    setDuration(nextDuration);
+    if (nextDuration > MAX_DURATION_SEC + 1) {
       setMetaError(
-        `វីដេអូវែងជាង 10 នាទី (${formatDuration(d)}) — សូមកាត់វីដេអូឲ្យខ្លីជាង 10 នាទីសិន។`
+        `វីដេអូវែងជាង 10 នាទី (${formatDuration(nextDuration)}) — សូមកាត់វីដេអូឲ្យខ្លីជាង 10 នាទីសិន។`
       );
       setFile(null);
       return;
     }
-    if (d < MIN_DURATION_SEC) {
-      setMetaError(`វីដេអូខ្លីពេក (ត្រូវការយ៉ាងតិច ${MIN_DURATION_SEC} វិនាទី)។`);
+    if (nextDuration < MIN_DURATION_SEC) {
+      setMetaError(
+        `វីដេអូខ្លីពេក (ត្រូវការយ៉ាងតិច ${MIN_DURATION_SEC} វិនាទី)។`
+      );
       setFile(null);
       return;
     }
     setMetaError(null);
-    setProgress((p) => ({ ...p, phase: "idle" }));
   }, []);
 
-  const startAnalysis = useCallback(async () => {
-    if (!file || !duration || busy) return;
-
-    cancelledRef.current = false;
+  const beginAnalysis = useCallback(() => {
+    if (!file || !duration || busy || !geminiConfigured) return;
     setCopied(false);
-    setProgress({
-      phase: "processing",
-      stageMessage: "កំពុងដក Frames ពីវីដេអូក្នុង Browser...",
-      script: "",
-      title: null,
-      error: null,
-    });
-
-    try {
-      const { frames, intervalSec } = await extractFrames(file, duration, (done, total) => {
-        if (cancelledRef.current) return;
-        setProgress((p) => ({
-          ...p,
-          stageMessage: `កំពុងដក Frames... ${done}/${total}`,
-        }));
-      });
-      if (cancelledRef.current) return;
-
-      const modelLabel = selectedModelInfo?.label ?? selectedModel;
-      setProgress((p) => ({
-        ...p,
-        phase: "streaming",
-        stageMessage: `ផ្ញើ ${frames.length} Frames ទៅ ${modelLabel} — កំពុងសរសេរស្គ្រីបសម្រាយរឿងជាភាសាខ្មែរ...`,
-      }));
-
-      let script = "";
-      for await (const chunk of streamRecapScript({
-        fileName: file.name,
-        durationSec: duration,
-        frames,
-        intervalSec,
-        model: selectedModel,
-      })) {
-        if (cancelledRef.current) return;
-        script += chunk;
-        setProgress((p) => ({ ...p, phase: "streaming", script: p.script + chunk }));
-      }
-
-      if (!script.trim()) {
-        throw new GeminiError("Gemini មិនបានផ្ដល់លទ្ធផលទេ។ សូមព្យាយាមម្ដងទៀត។");
-      }
-
-      const title = extractTitle(script);
-      const record: RecapRecord = {
-        id: crypto.randomUUID(),
-        title,
-        fileName: file.name,
-        durationSec: duration,
-        frameCount: frames.length,
-        model: selectedModel,
-        script,
-        createdAt: new Date().toISOString(),
-      };
-      saveRecap(record);
-      onSaved(record);
-
-      setProgress((p) => ({
-        ...p,
-        phase: "done",
-        title,
-        stageMessage: "ស្គ្រីបបានបង្កើតរួចរាល់! 🎉",
-      }));
-    } catch (error) {
-      if (cancelledRef.current) return;
-      const message =
-        error instanceof Error ? error.message : "មានបញ្ហាមិនស្គាល់។ សូមព្យាយាមម្ដងទៀត។";
-      setProgress((p) => ({ ...p, phase: "error", error: message }));
-    }
-  }, [file, duration, busy, selectedModel, selectedModelInfo, onSaved]);
+    startSharedAnalysis(file, duration, selectedModel);
+  }, [file, duration, busy, geminiConfigured, selectedModel]);
 
   const reset = useCallback(() => {
-    cancelledRef.current = true;
+    resetSharedAnalysis();
     setFile(null);
     setDuration(null);
     setMetaError(null);
     setCopied(false);
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setVideoUrl(null);
-    setProgress({
-      phase: "idle",
-      stageMessage: "",
-      script: "",
-      title: null,
-      error: null,
-    });
     if (inputRef.current) inputRef.current.value = "";
   }, [videoUrl]);
 
@@ -248,9 +170,9 @@ export default function UploadZone({
     try {
       await navigator.clipboard.writeText(progress.script);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      // ignore
+      // Clipboard access can be unavailable in private browsing contexts.
     }
   }, [progress.script]);
 
@@ -311,7 +233,7 @@ export default function UploadZone({
       <div
         onDragOver={(e) => {
           e.preventDefault();
-          setDragOver(true);
+          if (!busy) setDragOver(true);
         }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
@@ -326,22 +248,21 @@ export default function UploadZone({
             : "border-slate-700 bg-slate-900/60 hover:border-slate-500"
         }`}
       >
-        {!geminiConfigured && (
+        {!geminiConfigured && workerConfigured !== null && (
           <div className="mb-6 flex items-start gap-2.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3.5 text-left text-sm text-amber-200">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
             <div>
               <p className="font-bold">មិនទាន់មាន Gemini API Key នៅឡើយទេ</p>
               <p className="mt-1 text-amber-200/80">
-                សូមបញ្ចូល Key ក្នុងផ្នែក <strong>Gemini API Key</strong> ខាងលើ (យក Key ពី{" "}
-                <a
-                  href="https://aistudio.google.com/apikey"
-                  target="_blank"
-                  rel="noreferrer"
+                សូមចូលផ្ទាំង{" "}
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
                   className="font-semibold text-amber-300 underline underline-offset-2"
                 >
-                  aistudio.google.com/apikey
-                </a>
-                )។
+                  API Keys
+                </button>{" "}
+                ដើម្បីបញ្ចូល និងរក្សាទុក Key ក្នុង Browser នេះ។
               </p>
             </div>
           </div>
@@ -351,6 +272,7 @@ export default function UploadZone({
           ref={inputRef}
           type="file"
           accept="video/*"
+          disabled={busy}
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -362,7 +284,8 @@ export default function UploadZone({
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            className="group flex w-full cursor-pointer flex-col items-center gap-4 outline-none"
+            disabled={busy}
+            className="group flex w-full cursor-pointer flex-col items-center gap-4 outline-none disabled:cursor-not-allowed disabled:opacity-60"
           >
             <div className="relative">
               <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-red-500 shadow-[0_10px_40px_rgba(245,158,11,0.35)] transition-transform group-hover:scale-105">
@@ -373,9 +296,13 @@ export default function UploadZone({
               </span>
             </div>
             <div>
-              <p className="text-lg font-bold text-white">ចុច ឬអូសវីដេអូមកទម្លាក់ទីនេះ</p>
+              <p className="text-lg font-bold text-white">
+                {busy ? "វីដេអូកំពុងត្រូវបានវិភាគ" : "ចុច ឬអូសវីដេអូមកទម្លាក់ទីនេះ"}
+              </p>
               <p className="mt-1.5 text-sm text-slate-400">
-                ទ្រង់ទ្រាយ៖ MP4, WebM, MOV • រហូតដល់ 10 នាទី • 100MB
+                {busy
+                  ? "អ្នកអាចចូលមើលប្រវត្តិ ឬ API Keys បាន — ដំណើរការនេះនឹងមិនឈប់ទេ។"
+                  : "ទ្រង់ទ្រាយ៖ MP4, WebM, MOV • រហូតដល់ 10 នាទី • 100MB"}
               </p>
             </div>
             <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-xs text-slate-400">
@@ -430,7 +357,7 @@ export default function UploadZone({
                   </button>
                   <button
                     type="button"
-                    onClick={startAnalysis}
+                    onClick={beginAnalysis}
                     disabled={!duration || !!metaError || !geminiConfigured}
                     className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-red-500 px-5 py-2 text-sm font-bold text-slate-950 shadow-[0_8px_30px_rgba(245,158,11,0.35)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                   >
@@ -501,10 +428,14 @@ export default function UploadZone({
               <p className="font-bold text-red-300">មានបញ្ហាក្នុងការវិភាគ</p>
               <p className="mt-1 text-sm leading-relaxed text-red-200/90">{progress.error}</p>
               {progress.error?.includes("API Key") && (
-                <p className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-slate-900/70 px-3 py-2 text-xs font-semibold text-amber-300 ring-1 ring-slate-700">
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-slate-900/70 px-3 py-2 text-xs font-semibold text-amber-300 ring-1 ring-slate-700"
+                >
                   <KeyRound className="h-3.5 w-3.5" />
-                  បញ្ចូល Key ក្នុងផ្នែក Gemini API Key ខាងលើ
-                </p>
+                  ទៅកាន់ផ្ទាំង API Keys
+                </button>
               )}
             </div>
           </div>
