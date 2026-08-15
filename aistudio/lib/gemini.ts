@@ -1,6 +1,7 @@
 import { buildRecapPrompt } from "./prompt";
 import { formatClock } from "./constants";
 import type { ExtractedFrame } from "./frames";
+import { getSavedApiKey } from "./storage";
 
 export class GeminiError extends Error {}
 
@@ -13,14 +14,23 @@ export interface RecapStreamInput {
 }
 
 /**
- * Sends browser-extracted frames to the Worker. The Gemini key remains a
- * Worker secret and is never bundled into the client application.
+ * Sends browser-extracted frames to the Worker. A key saved by the user is
+ * attached only to this HTTPS request; otherwise the Worker Secret is used.
+ * Neither key is bundled into the public client application.
  */
-export async function* streamRecapScript(input: RecapStreamInput): AsyncGenerator<string, void, unknown> {
+export async function* streamRecapScript(
+  input: RecapStreamInput,
+  signal?: AbortSignal
+): AsyncGenerator<string, void, unknown> {
+  const savedKey = getSavedApiKey();
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (savedKey) headers["x-gemini-api-key"] = savedKey;
+
   const response = await fetch("/api/analyze", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(input),
+    signal,
   });
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => ({})) as { error?: string; detail?: string };

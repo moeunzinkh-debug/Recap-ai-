@@ -1,6 +1,6 @@
 export interface Env {
-  /** Set with: npx wrangler secret put GEMINI_API_KEY */
-  GEMINI_API_KEY: string;
+  /** Optional fallback set with: npx wrangler secret put GEMINI_API_KEY */
+  GEMINI_API_KEY?: string;
 }
 
 type Frame = { base64: string; timeSec: number };
@@ -46,7 +46,17 @@ function generationConfig(model: string): Record<string, unknown> {
 }
 
 async function analyze(request: Request, env: Env): Promise<Response> {
-  if (!env.GEMINI_API_KEY) return json({ error: "GEMINI_API_KEY is not configured." }, 503);
+  // A per-user key saved in the browser takes priority. If none is supplied,
+  // deployments can continue to use the shared Cloudflare Worker Secret.
+  const browserKey = (request.headers.get("x-gemini-api-key") ?? "").trim();
+  if (browserKey.length > 512) return json({ error: "Invalid Gemini API Key." }, 400);
+  const apiKey = browserKey || env.GEMINI_API_KEY?.trim();
+  if (!apiKey) {
+    return json(
+      { error: "មិនទាន់មាន Gemini API Key។ សូមរក្សាទុក Key ក្នុងផ្ទាំង API Keys។" },
+      503
+    );
+  }
   let input: AnalyzeInput;
   try { input = await request.json<AnalyzeInput>(); } catch { return json({ error: "Invalid JSON body." }, 400); }
   if (!input || !MODELS.has(input.model) || !Number.isFinite(input.durationSec) || input.durationSec < 3 || input.durationSec > 600 || !Array.isArray(input.frames) || input.frames.length < 1 || input.frames.length > MAX_FRAMES) {
@@ -63,7 +73,7 @@ async function analyze(request: Request, env: Env): Promise<Response> {
   ));
   const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
+    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: generationConfig(input.model) }),
   });
   if (!upstream.ok || !upstream.body) {
