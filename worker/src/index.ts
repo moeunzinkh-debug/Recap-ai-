@@ -39,6 +39,39 @@ function prompt(input: AnalyzeInput): string {
 - បញ្ចប់ដោយ ### សង្ខេបសាច់រឿង។`;
 }
 
+/** Translates an upstream Gemini failure into an actionable Khmer message. */
+function geminiErrorMessage(status: number, body: string, model: string): string {
+  let upstreamMessage = "";
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string } };
+    upstreamMessage = parsed.error?.message ?? "";
+  } catch {
+    // Non-JSON error bodies (HTML error pages) fall back to the status code.
+  }
+
+  if (status === 400 && /API key not valid|API_KEY_INVALID/i.test(upstreamMessage)) {
+    return "Gemini API Key មិនត្រឹមត្រូវ។ សូមពិនិត្យ Key ក្នុងផ្ទាំង API Keys។";
+  }
+  if (status === 401 || status === 403) {
+    return "គ្មានសិទ្ធិប្រើប្រាស់ Gemini ជាមួយ Key នេះទេ។ សូមពិនិត្យ Key របស់អ្នក។";
+  }
+  if (status === 404) {
+    return `ម៉ូដែល ${model} មិនអាចប្រើបានជាមួយ API Key របស់អ្នកទេ។ សូមជ្រើសរើសម៉ូដែលផ្សេង។`;
+  }
+  if (status === 429) {
+    return "លើសកូតាប្រើប្រាស់ Gemini (Quota Exceeded)។ សូមរង់ចាំមួយភ្លែត រួចព្យាយាមម្ដងទៀត។";
+  }
+  if (status === 413 || /too large|exceeds/i.test(upstreamMessage)) {
+    return "ទិន្នន័យរូបភាពធំពេកសម្រាប់ម៉ូដែលនេះ។ សូមសាកល្បងវីដេអូខ្លីជាងនេះ។";
+  }
+  if (status >= 500) {
+    return `ម៉ាស៊ីនបម្រើ Gemini មានបញ្ហាបណ្ដោះអាសន្ន (${status})។ សូមព្យាយាមម្ដងទៀត។`;
+  }
+  return upstreamMessage
+    ? `Gemini API បរាជ័យ៖ ${upstreamMessage.slice(0, 160)}`
+    : `Gemini API បរាជ័យ (${status})។`;
+}
+
 function generationConfig(model: string): Record<string, unknown> {
   return model.startsWith("gemini-3.")
     ? { maxOutputTokens: 8192, thinkingConfig: { thinkingLevel: "low" } }
@@ -77,8 +110,11 @@ async function analyze(request: Request, env: Env): Promise<Response> {
     body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: generationConfig(input.model) }),
   });
   if (!upstream.ok || !upstream.body) {
-    const detail = (await upstream.text()).slice(0, 300);
-    return json({ error: `Gemini API error (${upstream.status}).`, detail }, upstream.status);
+    const raw = await upstream.text();
+    return json(
+      { error: geminiErrorMessage(upstream.status, raw, input.model), detail: raw.slice(0, 300) },
+      upstream.status
+    );
   }
   return new Response(upstream.body, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff" } });
 }
