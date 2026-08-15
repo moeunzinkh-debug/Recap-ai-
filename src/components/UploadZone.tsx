@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   BrainCircuit,
@@ -31,41 +31,13 @@ import {
   formatDuration,
   type GeminiModelOption,
 } from "@/lib/constants";
-
-type Phase = "idle" | "validating" | "uploading" | "processing" | "streaming" | "done" | "error";
-
-interface ProgressState {
-  phase: Phase;
-  uploadPercent: number;
-  stageMessage: string;
-  script: string;
-  recapId: string | null;
-  title: string | null;
-  error: string | null;
-}
-
-interface SSEEvent {
-  event: string;
-  data: string;
-}
-
-function parseSSE(buf: string): { events: SSEEvent[]; rest: string } {
-  const events: SSEEvent[] = [];
-  let rest = buf;
-  let idx: number;
-  while ((idx = rest.indexOf("\n\n")) !== -1) {
-    const raw = rest.slice(0, idx);
-    rest = rest.slice(idx + 2);
-    let event = "message";
-    let data = "";
-    for (const line of raw.split("\n")) {
-      if (line.startsWith("event:")) event = line.slice(6).trim();
-      else if (line.startsWith("data:")) data += line.slice(5).trim();
-    }
-    if (data) events.push({ event, data });
-  }
-  return { events, rest };
-}
+import {
+  getAnalysisState,
+  subscribeAnalysis,
+  startAnalysis,
+  resetAnalysis,
+  isBusyPhase,
+} from "@/lib/analysisStore";
 
 export default function UploadZone() {
   const [file, setFile] = useState<File | null>(null);
@@ -75,18 +47,16 @@ export default function UploadZone() {
   const [dragOver, setDragOver] = useState(false);
   const [copied, setCopied] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const xhrRef = useRef<XMLHttpRequest | null>(null);
   const scriptRef = useRef<HTMLDivElement>(null);
 
-  const [progress, setProgress] = useState<ProgressState>({
-    phase: "idle",
-    uploadPercent: 0,
-    stageMessage: "",
-    script: "",
-    recapId: null,
-    title: null,
-    error: null,
-  });
+  // The analysis progress lives in a module-level store so navigating to
+  // another page never cancels the in-flight request.
+  const progress = useSyncExternalStore(
+    subscribeAnalysis,
+    getAnalysisState,
+    getAnalysisState
+  );
+
   const [geminiConfigured, setGeminiConfigured] = useState<boolean | null>(null);
   const [models, setModels] = useState<GeminiModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(MODEL);
@@ -110,11 +80,7 @@ export default function UploadZone() {
     models.find((m) => m.id === selectedModel) ?? null;
 
   const phase = progress.phase;
-  const busy = phase === "uploading" || phase === "processing" || phase === "streaming";
-
-  useEffect(() => {
-    return () => xhrRef.current?.abort();
-  }, []);
+  const busy = isBusyPhase(phase);
 
   useEffect(() => {
     if (phase === "streaming" && scriptRef.current) {
@@ -122,37 +88,41 @@ export default function UploadZone() {
     }
   }, [progress.script, phase]);
 
-  const validateFile = useCallback((f: File) => {
-    setMetaError(null);
+  const validateFile = useCallback(
+    (f: File) => {
+      setMetaError(null);
 
-    const lowerName = f.name.toLowerCase();
-    const hasVideoExtension = VIDEO_EXTENSIONS.some((extension) =>
-      lowerName.endsWith(extension)
-    );
-    if (!f.type.toLowerCase().startsWith("video/") && !hasVideoExtension) {
-      setMetaError("សូមជ្រើសរើសតែឯកសារវីដេអូ (MP4, WebM, MOV, MKV...)។");
-      setFile(null);
-      return;
-    }
-    if (f.size > MAX_FILE_SIZE) {
-      setMetaError(
-        `ឯកសារធំជាង 100MB (${formatBytes(f.size)}) — សូមជ្រើសរើសវីដេអូតូចជាងនេះ។`
+      const lowerName = f.name.toLowerCase();
+      const hasVideoExtension = VIDEO_EXTENSIONS.some((extension) =>
+        lowerName.endsWith(extension)
       );
-      setFile(null);
-      return;
-    }
-    if (f.size <= 0) {
-      setMetaError("ឯកសារវីដេអូទទេ។");
-      setFile(null);
-      return;
-    }
+      if (!f.type.toLowerCase().startsWith("video/") && !hasVideoExtension) {
+        setMetaError("សូមជ្រើសរើសតែឯកសារវីដេអូ (MP4, WebM, MOV, MKV...)។");
+        setFile(null);
+        return;
+      }
+      if (f.size > MAX_FILE_SIZE) {
+        setMetaError(
+          `ឯកសារធំជាង 100MB (${formatBytes(f.size)}) — សូមជ្រើសរើសវីដេអូតូចជាងនេះ។`
+        );
+        setFile(null);
+        return;
+      }
+      if (f.size <= 0) {
+        setMetaError("ឯកសារវីដេអូទទេ។");
+        setFile(null);
+        return;
+      }
 
-    setFile(f);
-    setDuration(null);
-    if (videoUrl) URL.revokeObjectURL(videoUrl);
-    setVideoUrl(URL.createObjectURL(f));
-    setProgress((p) => ({ ...p, phase: "validating", script: "", recapId: null, title: null, error: null }));
-  }, [videoUrl]);
+      // Selecting a new video cancels any previous/in-flight analysis.
+      resetAnalysis();
+      setFile(f);
+      setDuration(null);
+      if (videoUrl) URL.revokeObjectURL(videoUrl);
+      setVideoUrl(URL.createObjectURL(f));
+    },
+    [videoUrl]
+  );
 
   const handleMetadata = useCallback(() => {
     const vid = document.getElementById("preview-video") as HTMLVideoElement | null;
@@ -174,132 +144,21 @@ export default function UploadZone() {
       return;
     }
     setMetaError(null);
-    setProgress((p) => ({ ...p, phase: "idle" }));
   }, []);
 
-  const handleEvents = useCallback((events: SSEEvent[]) => {
-    for (const ev of events) {
-      if (ev.event === "progress") {
-        const data = JSON.parse(ev.data) as { stage: string; message: string };
-        setProgress((p) => ({
-          ...p,
-          phase: data.stage === "gemini" ? "streaming" : "processing",
-          stageMessage: data.message,
-        }));
-      } else if (ev.event === "chunk") {
-        const data = JSON.parse(ev.data) as { text: string };
-        setProgress((p) => ({
-          ...p,
-          phase: "streaming",
-          script: p.script + data.text,
-        }));
-      } else if (ev.event === "done") {
-        const data = JSON.parse(ev.data) as { id: string; title: string };
-        setProgress((p) => ({
-          ...p,
-          phase: "done",
-          recapId: data.id,
-          title: data.title,
-          stageMessage: "ស្គ្រីបបានបង្កើតរួចរាល់! 🎉",
-        }));
-      } else if (ev.event === "error") {
-        const data = JSON.parse(ev.data) as { message: string };
-        setProgress((p) => ({ ...p, phase: "error", error: data.message }));
-      }
-    }
-  }, []);
-
-  const startAnalysis = useCallback(() => {
+  const beginAnalysis = useCallback(() => {
     if (!file || !duration || busy) return;
-
-    const form = new FormData();
-    form.append("video", file);
-    form.append("model", selectedModel);
-
-    const xhr = new XMLHttpRequest();
-    xhrRef.current = xhr;
-    let buffer = "";
-    let receivedLength = 0;
-    let terminalEventReceived = false;
-
-    setProgress({
-      phase: "uploading",
-      uploadPercent: 0,
-      stageMessage: "កំពុងបញ្ជូនឯកសារទៅម៉ាស៊ីនបម្រើ...",
-      script: "",
-      recapId: null,
-      title: null,
-      error: null,
-    });
-
-    xhr.open("POST", "/api/analyze");
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        setProgress((p) => ({ ...p, uploadPercent: pct }));
-      }
-    };
-
-    xhr.onreadystatechange = () => {
-      const text = xhr.responseText || "";
-      if (text.length > receivedLength) {
-        buffer += text.slice(receivedLength);
-        receivedLength = text.length;
-        const { events, rest } = parseSSE(buffer);
-        buffer = rest;
-        terminalEventReceived ||= events.some(
-          (event) => event.event === "done" || event.event === "error"
-        );
-        handleEvents(events);
-      }
-    };
-
-    xhr.onerror = () => {
-      setProgress((p) => ({
-        ...p,
-        phase: "error",
-        error: "បរាជ័យក្នុងការផ្ញើឯកសារ។ សូមពិនិត្យបណ្ដាញ ហើយព្យាយាមម្ដងទៀត។",
-      }));
-    };
-
-    xhr.onload = () => {
-      if (!terminalEventReceived) {
-        setProgress((p) => ({
-          ...p,
-          phase: "error",
-          error:
-            xhr.status >= 400
-              ? `ម៉ាស៊ីនបម្រើឆ្លើយតបដោយកំហុស (${xhr.status})។ សូមព្យាយាមម្ដងទៀត។`
-              : "ការតភ្ជាប់បានបញ្ចប់មុនពេលទទួលលទ្ធផល។ សូមព្យាយាមម្ដងទៀត។",
-        }));
-      }
-    };
-
-    xhr.onloadend = () => {
-      if (xhrRef.current === xhr) xhrRef.current = null;
-    };
-
-    xhr.send(form);
-  }, [file, duration, busy, selectedModel, handleEvents]);
+    startAnalysis(file, selectedModel);
+  }, [file, duration, busy, selectedModel]);
 
   const reset = useCallback(() => {
-    xhrRef.current?.abort();
+    resetAnalysis();
     setFile(null);
     setDuration(null);
     setMetaError(null);
     setCopied(false);
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     setVideoUrl(null);
-    setProgress({
-      phase: "idle",
-      uploadPercent: 0,
-      stageMessage: "",
-      script: "",
-      recapId: null,
-      title: null,
-      error: null,
-    });
     if (inputRef.current) inputRef.current.value = "";
   }, [videoUrl]);
 
@@ -511,7 +370,7 @@ export default function UploadZone() {
                   </button>
                   <button
                     type="button"
-                    onClick={startAnalysis}
+                    onClick={beginAnalysis}
                     disabled={!duration || !!metaError}
                     className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-red-500 px-5 py-2 text-sm font-bold text-slate-950 shadow-[0_8px_30px_rgba(245,158,11,0.35)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
                   >
