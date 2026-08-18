@@ -78,6 +78,26 @@ function generationConfig(model: string): Record<string, unknown> {
     : { temperature: 0.9, topP: 0.95, maxOutputTokens: 8192 };
 }
 
+/**
+ * Cloudflare terminates any proxied connection that stays silent for ~100
+ * seconds with HTTP 524. Gemini can legitimately need that long before its
+ * first streamed token once it receives 100+ frames, so the SSE stream is
+ * opened immediately and heartbeat comment lines flow while waiting —
+ * no hop on the path ever sees an idle connection.
+ */
+const KEEPALIVE_INTERVAL_MS = 15_000;
+/** Give up on Gemini itself if nothing at all arrives within 3 minutes. */
+const UPSTREAM_TIMEOUT_MS = 180_000;
+
+const textEncoder = new TextEncoder();
+
+/** Wraps an upstream failure as an SSE event the browser client understands. */
+function sseErrorEvent(code: number, message: string, status = ""): Uint8Array {
+  return textEncoder.encode(
+    `data: ${JSON.stringify({ error: { code, message, status } })}\n\n`
+  );
+}
+
 async function analyze(request: Request, env: Env): Promise<Response> {
   // A per-user key saved in the browser takes priority. If none is supplied,
   // deployments can continue to use the shared Cloudflare Worker Secret.
@@ -104,19 +124,100 @@ async function analyze(request: Request, env: Env): Promise<Response> {
     { text: `Frame ${index + 1}/${input.frames.length} — ${clock(frame.timeSec)}` },
     { inlineData: { mimeType: "image/jpeg", data: frame.base64 } },
   ));
-  const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: generationConfig(input.model) }),
+  const payload = JSON.stringify({
+    contents: [{ role: "user", parts }],
+    generationConfig: generationConfig(input.model),
   });
-  if (!upstream.ok || !upstream.body) {
-    const raw = await upstream.text();
-    return json(
-      { error: geminiErrorMessage(upstream.status, raw, input.model), detail: raw.slice(0, 300) },
-      upstream.status
-    );
-  }
-  return new Response(upstream.body, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-content-type-options": "nosniff" } });
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:streamGenerateContent?alt=sse`;
+  const model = input.model;
+
+  // Respond 200 immediately; every failure from here on is delivered inside
+  // the SSE stream as an `error` event, which the client already renders as
+  // a retryable Khmer message. Returning HTTP errors after a long await was
+  // what let Cloudflare kill the connection with a bare 524 page instead.
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let open = true;
+      const emit = (chunk: Uint8Array): boolean => {
+        if (!open) return false;
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          open = false; // Client disconnected.
+          return false;
+        }
+      };
+      const heartbeat = setInterval(() => {
+        emit(textEncoder.encode(": keepalive\n\n"));
+      }, KEEPALIVE_INTERVAL_MS);
+      const finish = () => {
+        if (!open) return;
+        open = false;
+        clearInterval(heartbeat);
+        try { controller.close(); } catch { /* already closed */ }
+      };
+
+      const timeout = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+      let signal: AbortSignal = timeout;
+      try {
+        if (typeof AbortSignal.any === "function") {
+          signal = AbortSignal.any([timeout, request.signal]);
+        }
+      } catch { /* keep the timeout-only signal */ }
+
+      try {
+        const upstream = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+          body: payload,
+          signal,
+        });
+
+        if (!upstream.ok || !upstream.body) {
+          const raw = await upstream.text().catch(() => "");
+          const status = upstream.status || 502;
+          emit(sseErrorEvent(status, geminiErrorMessage(status, raw, model), String(status)));
+          return;
+        }
+
+        const reader = upstream.body.getReader();
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value && !emit(value)) break; // Client went away.
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      } catch (error) {
+        if (timeout.aborted) {
+          emit(sseErrorEvent(
+            504,
+            "Gemini ឆ្លើយតបយឺតពេក (Timeout)។ សូមសាកល្បងវីដេអូខ្លីជាងនេះ ឬម៉ូដែល Flash-Lite រួចព្យាយាមម្ដងទៀត។",
+            "DEADLINE_EXCEEDED"
+          ));
+        } else if (open && !(request.signal?.aborted)) {
+          emit(sseErrorEvent(
+            503,
+            "មិនអាចតភ្ជាប់ទៅ Gemini បានទេ។ សូមរង់ចាំមួយភ្លែត រួចព្យាយាមម្ដងទៀត។",
+            "UNAVAILABLE"
+          ));
+        }
+      } finally {
+        finish();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 export default {

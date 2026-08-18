@@ -38,6 +38,18 @@ export async function POST(request: Request) {
         }
       };
 
+      // Send bytes immediately, then keep the connection warm: a proxy in
+      // front (e.g. Cloudflare) closes responses that stay silent for ~100s
+      // while a large video uploads or Gemini thinks.
+      send({ stage: "upload", message: "កំពុងទទួលឯកសារពី Browser..." }, "progress");
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(new TextEncoder().encode(": keepalive\n\n"));
+        } catch {
+          // stream closed
+        }
+      }, 15_000);
+
       let tmpVideo: string | null = null;
       let recordId: string | null = null;
 
@@ -211,6 +223,7 @@ export async function POST(request: Request) {
 
         send({ message }, "error");
       } finally {
+        clearInterval(heartbeat);
         if (tmpVideo) {
           await fs.rm(tmpVideo, { force: true }).catch(() => {});
         }
